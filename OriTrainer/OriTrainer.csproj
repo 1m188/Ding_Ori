@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <PlatformTarget>x86</PlatformTarget>
+    <RootNamespace>OriTrainer</RootNamespace>
+    <AssemblyName>OriTrainer</AssemblyName>
+    <Version>0.1.0</Version>
+    <Product>OriTrainer 奥日与迷失森林修改器</Product>
+    <Description>原版 + 终极版双支持的风灵月影风格修改器</Description>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <GenerateSupportedRuntime>false</GenerateSupportedRuntime>
+    <LangVersion>7.3</LangVersion>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="resources\fling_de_trainer.exe" LogicalName="OriTrainer.fling_de_trainer.exe" />
+  </ItemGroup>
+
+</Project>
