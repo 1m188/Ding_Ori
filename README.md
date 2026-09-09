@@ -1,73 +1,73 @@
-# OriTrainer — 奥日与迷失森林修改器
+# OriTrainer (Go) — 奥日与迷失森林（原版）修改器
 
-风灵月影风格的 C# WinForms 单文件修改器，同时支持两个版本：
+风灵月影风格的 Go TUI 修改器，目标**原版**《Ori and the Blind Forest》
+（Steam appid 261570，最终构建 buildid 814852 / Build Number 5474）。
 
-- **原版**《Ori and the Blind Forest》（appid 261570）—— 自研内存修改
-- **终极版**《Ori and the Blind Forest: Definitive Edition》（appid 387290）—— 内嵌 FLiNG 官方修改器，窗口嵌入程序内
+**纯标准库实现（零外部依赖），单 exe 发布。**
 
-## 使用方法
+## 使用
 
-1. 双击 `OriTrainer/publish/OriTrainer.exe`（需要管理员权限）。
-2. **原版页**：先启动游戏，程序自动附加 `ori.exe`（底部状态栏变绿）。
-   用数字键或勾选框切换功能；功能在进入存档后才实际生效。
-3. **终极版页**：点击"启动并嵌入终极版修改器"，FLiNG 修改器会释放到
-   `%TEMP%\OriTrainer\` 并嵌入本程序窗口内；关闭本程序时自动结束它并清理。
+1. 启动游戏，进入存档。
+2. 运行 `GoTrainer.exe`（管理员权限），等待 TUI 显示
+   `● 已附加` / `Sein 已定位` / 实时数值（约 15 秒全堆扫描）。
+3. 数字键 1-5 开关功能（**全局热键**，无需切换窗口），HOME 关闭全部，
+   F12 重新附加/重扫，F1 帮助，END 退出。
 
-### 原版热键表
+## 功能（全部已实机验证）
 
-| 热键 | 功能 | 实现方式 | 状态 |
-|------|------|----------|------|
-| 1 | 无限生命 | AOB 代码补丁 ×2（跳过伤害结算 + 跳过死亡分支） | 待验证 |
-| 2 | 无限能量 | AOB 代码补丁 ×2（两个扣能点，匹配哪个补哪个） | 待验证 |
-| 3 | 无限技能点 | AOB 代码补丁（跳过扣减存储） | 待验证 |
-| 4 | 死亡数冻结 | 指针链（激活瞬间捕获当前值） | 待验证 |
-| 5 | 技能点数冻结 | 指针链 | 待验证 |
-| 6 | 精神点(经验)冻结 | 指针链 | 待验证 |
-| HOME | 全部关闭 | — | — |
+| 热键 | 功能 | 验证记录 |
+|---|---|---|
+| 1 | 无限生命 | 外部写 6.0 → 50ms 内写回 24，15s 稳定 |
+| 2 | 无限能量 | 游戏内耗能后能量保持满值 |
+| 3 | 技能点冻结 | 外部写 42 → 拉回 1 |
+| 4 | 经验冻结 | 写 999999 → 游戏升级结算写入 989999 时被持续拉回 |
+| 5 | 死亡数冻结 | 写 777 → 500ms 内写回真实值 |
 
-大键盘和小键盘的数字键均可；热键是全局的（风灵月影同款），不吞键。
-全部功能来自 fearlessrevolution.com 社区 CE 表转写（本地副本见 `ctables/`），
-**尚未经过实机验证**，实测结果见下文"实测排错"。
+冻结语义 = 激活瞬间捕获当前值并每 50ms 写回（风灵月影同款）。
 
-## 地址维护（改条目 → 重编译）
+## 地址方案（重要：为什么不用 CE 表）
 
-所有原版地址集中在 **`OriTrainer/Ori/OriOffsets.cs`**（指针链）和
-**`OriTrainer/Ori/OriFeatures.cs`**（AOB 特征码），这是全程序唯一的地址维护点，
-没有任何外部配置文件。
+2015 年社区 CE 表（ubiByte/Dix Dark）的 AOB 特征码与指针链
+**均不适配本构建**（实机验证失败）。本项目的地址通过 CE 7.6 mono dissect
+按类名考古获得，并验证了跨重启稳定性：
+
+- 类静态槽在 mono 确定性分配下跨重启稳定，但该地址位于 MonoDataCollector
+  注入层的地址空间，**外部读取时为 MEM_FREE，不可直接固化**——CE 表的
+  `mono.dll+XXXX` 写法对外部训练器是死路。
+- 可靠方案是**全堆扫描 + 结构签名**（见 `ori/resolver.go`）：
+  - `SeinLevel`：回指签名 `u32(X+0x20)=P && u32(P+0x38)==X`，
+    加 Energy.Max ∈ [1,50]、Health.MaxHealth ∈ [12,400] 双重验证挑出活体
+    （排除传送门克隆与 UI 副本）；
+  - `SeinDeathCounter`：稳定魔数 `u32(X+8)==0xFFFF18A6`；
+  - 两阶段批处理扫描（本地快筛 + 候选 RPM 验证），约 14 秒遍历全堆。
+
+字段偏移（SeinCharacter/SeinLevel/SeinEnergy/SeinMortality/SeinHealthController）
+集中在 `ori/offsets.go`，数值已与游戏画面逐一核对
+（死亡 333、GameTime 10939s≈存档 05:11、SP=1、Exp=1187、能量 0.5/5.0）。
+
+## 已知边界
+
+- 游戏失焦/暂停时 GameTime 停走，堆扫描仍可用（扫描不依赖游戏激活）。
+- Mono 老版 Boehm GC 不移动对象，实例地址在存续期内稳定；场景切换可能重建对象，
+  训练器每 2 秒校验失败自动重扫。
+- 64 位 Go 进程读写 32 位目标正常，但**区域枚举必须接受 MEM_MAPPED 段**
+  （mono 堆是 mapped section 而非 private，保护属性含执行位），见 `core/memory.go`。
+
+## 构建
 
 ```bash
-dotnet publish -c Release -o OriTrainer/publish OriTrainer/OriTrainer.csproj
+cd GoTrainer && go build -o GoTrainer.exe .
 ```
 
-产物 `publish/OriTrainer.exe`（约 1.2MB，FLiNG exe 已内嵌），拷走即可用。
-
-### 指针链不通时
-
-先把 `OriOffsets.cs` 里的 `ReverseCeOffsets` 常量改为 `false`（CE 表偏移顺序的两种
-解读互换，一条链都通了就不用动）。仍不通则需用 CE 重新验证该条链。
-
-### AOB 补丁找不到时
-
-状态栏会显示"特征扫描中…"。Mono 的 JIT 代码只有对应方法被执行过才存在——
-进入游戏触发相关动作（受击、耗能、用技能点）后再激活。若始终找不到，说明游戏
-构建与 CE 表版本有差异，需要用 CE 重新抓特征码并更新 `OriFeatures.cs`。
-
-## 已知边界 / v2 计划
-
-- 终极版修改器（FLiNG）目标 v1.0，本机终极版打过 3DM 汉化补丁，兼容性由使用者确认。
-- 大表（kemenner mono 表）的 `pSeinCharacter` 字段族（跳跃高度/能力/憋气/伤害等）
-  依赖 JIT 代码钩子捕获实例指针，外部改法无法直接转写，v2 可做：
-  代码钩子注入捕获 / mono 静态结构解析 / VirtualAllocEx 落补丁码（灵魂+10）。
-- 公开发布需注意：内嵌的 FLiNG 修改器版权归其作者所有，仅限自用。
-
-## 工程
+## 目录
 
 ```
-OriTrainer/
-  OriTrainer.csproj      net48 / WinForms / x86 / requireAdministrator
-  Core/                  内存读写、指针链、AOB 扫描、热键轮询、功能引擎
-  Ori/                   ★ 地址常量与功能定义（唯一维护点）
-  UI/                    主窗体 + 双 tab
-  De/DeTrainerHost.cs    FLiNG exe 释放/启动/嵌入/清理
-ctables/                 三张来源 CE 表（仅解析用，不参与发布）
+GoTrainer/
+  main.go            TUI + 热键轮询 + 附加看护 + 功能引擎
+  core/memory.go     进程读写 / 区域枚举 / 指针链（32 位指针）
+  ori/offsets.go     ★ 地址常量（唯一维护点）
+  ori/resolver.go    堆扫描定位活体对象
+  ori/features.go    冻结型功能
+ctables/             CE 表与 mono 探针存档（研究记录）
+OriTrainer/          旧 C#/WinForms 版本（已弃用，留作参考）
 ```

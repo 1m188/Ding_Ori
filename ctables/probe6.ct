@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CheatTable CheatEngineTableVersion="41">
+  <LuaScript>
+local out = io.open('D:/code/Ding_Ori/ctables/mono_result.txt', 'w')
+local function log(s) out:write(tostring(s) .. '\n') out:flush() end
+local function hf(x) return string.format('0x%X', tonumber(x) or 0) end
+
+log('=== probe6: live values ===')
+openProcess('ori.exe')
+local dc = LaunchMonoDataCollector()
+
+local img = nil
+for _, a in ipairs(mono_enumAssemblies() or {}) do
+  local im = mono_getImageFromAssembly(a)
+  if mono_image_get_name(im) == 'Assembly-CSharp' then img = im end
+end
+
+local classes = mono_image_enumClasses(img)
+local byname = {}
+for _, c in ipairs(classes or {}) do
+  byname[tostring(c.classname or '')] = c.class
+end
+
+local function classFields(cls)
+  local t = {}
+  for _, f in ipairs(mono_class_enumFields(cls) or {}) do
+    t[tostring(f.name)] = { offset=f.offset, isStatic=f.isStatic }
+  end
+  return t
+end
+
+-- 1) 死亡计数 via SeinDeathCounter.Instance
+local dcCls = byname['SeinDeathCounter']
+local dcs, dcAddr = pcall(mono_class_getStaticFieldAddress, 0, dcCls)
+local instPtr = dcAddr and readInteger(dcAddr) or nil
+log('SeinDeathCounter.Instance = ' .. hf(instPtr or 0))
+if instPtr then
+  log('  m_deathCounter = ' .. tostring(readInteger(instPtr + 20)))
+end
+
+-- 2) GameController.Instance -> GameTime / SaveGameController
+local gcCls = byname['GameController']
+local gcs, gcAddr = pcall(mono_class_getStaticFieldAddress, 0, gcCls)
+local gcPtr = gcAddr and readInteger(gcAddr) or nil
+log('GameController.Instance = ' .. hf(gcPtr or 0))
+if gcPtr then
+  log('  GameTime = ' .. tostring(readFloat(gcPtr + 100)))
+  local sgcPtr = readInteger(gcPtr + 24)
+  log('  SaveGameController ptr = ' .. hf(sgcPtr or 0))
+  if sgcPtr then
+    local sf = classFields(sgcPtr and mono_object_getClass(sgcPtr))
+    for n, f in pairs(sf) do log('    SGC inst field ' .. n .. ' offset=' .. tostring(f.offset)) end
+  end
+end
+
+-- 3) 找 Sein: GameController.Systems / 或搜 Sein 类
+-- 通过 GameController.Instance 的字段 Systems(28) 找
+if gcPtr then
+  local sysPtr = readInteger(gcPtr + 28)
+  log('  Systems ptr = ' .. hf(sysPtr or 0))
+end
+
+-- 4) 列出含 Sein 的类名（为找 Health/Energy 实例路径）
+local seinClasses = {}
+for _, c in ipairs(classes or {}) do
+  local cn = tostring(c.classname or '')
+  if cn:match('^Sein') or cn == 'HealthUpgradesController' or cn == 'EnergyUpgradesController' or cn == 'SeinLevel' then
+    seinClasses[cn] = c.class
+  end
+end
+local keys = {}
+for k in pairs(seinClasses) do keys[#keys+1] = k end
+table.sort(keys)
+for _, k in ipairs(keys) do log('sein-class: ' .. k) end
+
+-- 5) SeinLevel 的字段（有 Experience/SkillPoints 的可能）
+local lvl = seinClasses['SeinLevel']
+if lvl then
+  log('=== SeinLevel fields')
+  for n, f in pairs(classFields(lvl)) do log('  ' .. n .. ' offset=' .. tostring(f.offset) .. ' static=' .. tostring(f.isStatic)) end
+  local oks, saddr = pcall(mono_class_getStaticFieldAddress, 0, lvl)
+  if oks and saddr then log('  staticAddr: ' .. hf(saddr) .. ' [0]=' .. hf(readInteger(saddr) or 0)) end
+end
+
+log('=== probe6 done ===')
+out:close()
+  </LuaScript>
+</CheatTable>

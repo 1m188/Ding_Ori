@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Drawing;
 using System.IO;
 using System.Threading;
 using System.Windows.Forms;
@@ -10,9 +11,11 @@ namespace OriTrainer.De
     /// <summary>
     /// 终极版（FLiNG）修改器宿主：
     /// 1) 从内嵌资源释放到 %TEMP%\OriTrainer\（必须保留原始文件名——该 exe 内部引用自身文件名）；
-    /// 2) 启动子进程，等待主窗口；
-    /// 3) SetParent 嵌入指定容器（去标题栏改子窗口样式），失败可降级为独立窗口；
-    /// 4) Cleanup 结束子进程并删除临时文件。
+    /// 2) 启动子进程，等待主窗口，自动定位到本程序旁边；
+    /// 3) Cleanup 在退出时结束子进程并删除临时文件。
+    ///
+    /// 注：实测（重父级健康实例立即黑屏 + PrintWindow 无内容）该修改器的渲染引擎
+    /// 不支持作为子窗口工作，因此不做 SetParent 嵌入，以独立窗口旁挂方式运行。
     /// </summary>
     internal sealed class DeTrainerHost
     {
@@ -66,8 +69,8 @@ namespace OriTrainer.De
             return _child != null;
         }
 
-        /// <summary>等待子进程主窗口并尝试嵌入容器；失败返回 false（子进程继续以独立窗口运行）。</summary>
-        public bool TryEmbed(Control container)
+        /// <summary>等待子进程主窗口出现，并把它定位到宿主窗口旁边（放不下则居中）。返回是否找到了窗口。</summary>
+        public bool WaitAndPositionNextTo(IntPtr hostWindow)
         {
             _childHwnd = IntPtr.Zero;
             for (int i = 0; i < 60; i++)
@@ -88,31 +91,33 @@ namespace OriTrainer.De
                 }
                 Thread.Sleep(250);
             }
-            if (_childHwnd == IntPtr.Zero || container == null || !container.IsHandleCreated)
+            if (_childHwnd == IntPtr.Zero)
                 return false;
 
             try
             {
-                int style = NativeMethods.GetWindowLong(_childHwnd, NativeMethods.GWL_STYLE);
-                style &= ~(NativeMethods.WS_CAPTION | NativeMethods.WS_THICKFRAME | NativeMethods.WS_SYSMENU
-                           | NativeMethods.WS_MINIMIZEBOX | NativeMethods.WS_MAXIMIZEBOX | NativeMethods.WS_POPUP);
-                style |= NativeMethods.WS_CHILD | NativeMethods.WS_VISIBLE;
-                NativeMethods.SetWindowLong(_childHwnd, NativeMethods.GWL_STYLE, style);
-                NativeMethods.SetParent(_childHwnd, container.Handle);
-                ResizeTo(container.ClientRectangle);
-                NativeMethods.ShowWindow(_childHwnd, NativeMethods.SW_SHOW);
+                NativeMethods.RECT hostR, childR;
+                NativeMethods.GetWindowRect(hostWindow, out hostR);
+                NativeMethods.GetWindowRect(_childHwnd, out childR);
+                var work = Screen.PrimaryScreen.WorkingArea;
+
+                int cw = childR.Right - childR.Left, ch = childR.Bottom - childR.Top;
+                int x = hostR.Right + 8;
+                int y = hostR.Top;
+                if (x + cw > work.Right)
+                {
+                    // 旁边放不下：屏幕居中
+                    x = work.Left + Math.Max(0, (work.Width - cw) / 2);
+                    y = work.Top + Math.Max(0, (work.Height - ch) / 2);
+                }
+                NativeMethods.SetWindowPos(_childHwnd, IntPtr.Zero, x, y, 0, 0,
+                    NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOZORDER);
                 return true;
             }
             catch (Exception)
             {
-                return false;
+                return true; // 定位失败不影响运行
             }
-        }
-
-        public void ResizeTo(System.Drawing.Rectangle r)
-        {
-            if (_childHwnd != IntPtr.Zero && NativeMethods.IsWindow(_childHwnd))
-                NativeMethods.MoveWindow(_childHwnd, r.X, r.Y, r.Width, r.Height, true);
         }
 
         public void Cleanup()

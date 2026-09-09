@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CheatTable CheatEngineTableVersion="41">
+  <LuaScript>
+local out = io.open('D:/code/Ding_Ori/ctables/mono_result.txt', 'w')
+local function log(s) out:write(tostring(s) .. '\n') out:flush() end
+local function hf(x) return string.format('0x%X', tonumber(x) or 0) end
+
+log('=== probe7: instance paths ===')
+openProcess('ori.exe')
+local dc = LaunchMonoDataCollector()
+
+local img = nil
+for _, a in ipairs(mono_enumAssemblies() or {}) do
+  local im = mono_getImageFromAssembly(a)
+  if mono_image_get_name(im) == 'Assembly-CSharp' then img = im end
+end
+
+local byname = {}
+for _, c in ipairs(mono_image_enumClasses(img) or {}) do
+  byname[tostring(c.classname or '')] = c.class
+end
+
+local function fields(cls)
+  local t = {}
+  for _, f in ipairs(mono_class_enumFields(cls) or {}) do
+    t[tostring(f.name)] = { offset=f.offset, isStatic=f.isStatic }
+  end
+  return t
+end
+
+-- SeinCharacter 从 GameController.Instance.Controller(24) 或 Systems 里找
+local gcAddr = mono_class_getStaticFieldAddress(0, byname['GameController'])
+local gcPtr = readInteger(gcAddr)
+log('GC.Instance=' .. hf(gcPtr))
+
+local ctrlPtr = readInteger(gcPtr + 24)
+log('GC.Controller=' .. hf(ctrlPtr or 0))
+
+-- SeinCharacter 实例应为 Controller；其 Energy(60)/Mortality(64)
+local seinE, seinH
+if ctrlPtr then
+  local enPtr = readInteger(ctrlPtr + 60)
+  log('Sein.Energy=' .. hf(enPtr or 0))
+  if enPtr then
+    log('  Energy.Current=' .. tostring(readFloat(enPtr + 32)))
+    log('  Energy.Max=' .. tostring(readFloat(enPtr + 36)))
+  end
+  local morPtr = readInteger(ctrlPtr + 64)
+  log('Sein.Mortality=' .. hf(morPtr or 0))
+end
+
+-- GameController.Systems(28): dump 其类字段找 Health/Level 引用
+local sysPtr = readInteger(gcPtr + 28)
+if sysPtr then
+  local sysCls = mono_object_getClass(sysPtr)
+  local okn, sysName = pcall(mono_class_getName, sysCls)
+  log('Systems class=' .. tostring(sysName))
+  local sf = fields(sysCls)
+  for n, f in pairs(sf) do
+    if not f.isStatic then log('  Systems field ' .. n .. ' offset=' .. tostring(f.offset)) end
+  end
+end
+
+-- SeinHealthController: 找字段（它有 m_sein / Health 结构）
+local hc = byname['SeinHealthController']
+log('=== SeinHealthController fields')
+for n, f in pairs(fields(hc)) do log('  ' .. n .. ' offset=' .. tostring(f.offset) .. ' static=' .. tostring(f.isStatic)) end
+local hcAddr = mono_class_getStaticFieldAddress(0, hc)
+if hcAddr then log('  HC staticAddr=' .. hf(hcAddr) .. ' [0]=' .. hf(readInteger(hcAddr) or 0)) end
+
+-- SeinMortality 字段
+local mor = byname['SeinMortality']
+log('=== SeinMortality fields')
+for n, f in pairs(fields(mor)) do log('  ' .. n .. ' offset=' .. tostring(f.offset) .. ' static=' .. tostring(f.isStatic)) end
+
+-- SeinSkillPointsProvider / SeinLevel 实例路径: SeinCharacter 有没有 level 字段? 已知 SeinCharacter 字段里没有。
+-- 用 mono_class_findInstancesOfClassListOnly 找 SeinLevel 唯一实例
+local lvlCls = byname['SeinLevel']
+local okf, insts = pcall(mono_class_findInstancesOfClassListOnly, mono_enumDomains()[1], lvlCls)
+if okf then
+  log('SeinLevel instances: ' .. tostring(insts and #insts or 0))
+  for _, p in ipairs(insts or {}) do
+    log('  inst=' .. hf(p) .. ' SkillPoints=' .. tostring(readInteger(p + 36)) .. ' Experience=' .. tostring(readInteger(p + 44)))
+  end
+else
+  log('findInstances error: ' .. tostring(insts))
+end
+
+log('=== probe7 done ===')
+out:close()
+  </LuaScript>
+</CheatTable>

@@ -33,6 +33,7 @@ namespace OriTrainer.Core
 
         // ---------- user32 ----------
         public const int GWL_STYLE = -16;
+        public const int GWL_EXSTYLE = -20;
         public const int WS_CHILD = 0x40000000;
         public const int WS_VISIBLE = 0x10000000;
         public const int WS_CAPTION = 0x00C00000;
@@ -41,11 +42,18 @@ namespace OriTrainer.Core
         public const int WS_MINIMIZEBOX = 0x00020000;
         public const int WS_MAXIMIZEBOX = 0x00010000;
         public const int WS_POPUP = unchecked((int)0x80000000);
+        public const int WS_EX_LAYERED = 0x00080000;
 
         public const uint SWP_NOMOVE = 0x0002;
         public const uint SWP_NOSIZE = 0x0001;
         public const uint SWP_NOZORDER = 0x0004;
         public const uint SWP_FRAMECHANGED = 0x0020;
+
+        public const uint RDW_INVALIDATE = 0x0001;
+        public const uint RDW_ERASE = 0x0004;
+        public const uint RDW_ALLCHILDREN = 0x0080;
+        public const uint RDW_UPDATENOW = 0x0100;
+        public const uint RDW_FRAME = 0x0400;
 
         public const int SW_SHOW = 5;
         public const int SW_RESTORE = 9;
@@ -86,6 +94,21 @@ namespace OriTrainer.Core
 
         [DllImport("user32.dll", SetLastError = true)]
         public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        public static extern bool RedrawWindow(IntPtr hWnd, IntPtr lprcUpdate, IntPtr hrgnUpdate, uint flags);
+
+        [DllImport("user32.dll")]
+        public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct RECT
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
+        }
 
         // ---------- 内存区域枚举（AOB 特征码扫描用） ----------
         public const uint MEM_COMMIT = 0x1000;

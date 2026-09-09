@@ -31,7 +31,7 @@ namespace OriTrainer.UI
                 Dock = DockStyle.Top,
                 Height = 52,
                 ForeColor = Dim,
-                Text = "  先启动原版游戏（ori.exe），本页自动附加。数字键 1-9/0 切换对应功能（大键盘/小键盘均可），\r\n  HOME 关闭全部功能。勾选状态与热键实时同步。",
+                Text = "  先启动原版游戏（ori.exe），本页自动附加。\r\n  数字键 1-9/0 切换功能，HOME 关闭全部；勾选与热键同步。",
                 Padding = new Padding(4, 4, 0, 0)
             };
 
@@ -40,7 +40,7 @@ namespace OriTrainer.UI
                 Dock = DockStyle.Bottom,
                 Height = 44,
                 ForeColor = Dim,
-                Text = "  地址来源：FearLessRevolution 社区 CE 表（ubiByte / Dix Dark），详见 Ori/OriOffsets.cs。\r\n  标注 [待验证] 的功能来自社区表转写，尚未实机确认；无效请在游戏内反馈修正。",
+                Text = "  地址来源：FearLessRevolution 社区 CE 表，详见 Ori/OriOffsets.cs。\r\n  标注 [待验证] 的功能来自社区表转写，尚未实机确认。",
                 Padding = new Padding(4, 2, 0, 0)
             };
 

@@ -17,3 +17,5 @@ out/
 *.log
 *.tmp
 Thumbs.db
+## Go
+*.exe

@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CheatTable CheatEngineTableVersion="41">
+  <LuaScript>
+local out = io.open('D:/code/Ding_Ori/ctables/mono_result.txt', 'w')
+local function log(s) out:write(tostring(s) .. '\n') out:flush() end
+local function hf(x) return string.format('0x%X', tonumber(x) or 0) end
+
+log('=== probe9: discriminators ===')
+openProcess('ori.exe')
+local dc = LaunchMonoDataCollector()
+
+local img = nil
+for _, a in ipairs(mono_enumAssemblies() or {}) do
+  local im = mono_getImageFromAssembly(a)
+  if mono_image_get_name(im) == 'Assembly-CSharp' then img = im end
+end
+local byname = {}
+for _, c in ipairs(mono_image_enumClasses(img) or {}) do
+  byname[tostring(c.classname or '')] = c.class
+end
+local dom = mono_enumDomains()[1]
+
+-- 静态槽地址落在哪个模块/区域
+log('--- region check')
+local mods = enumModules()
+for _, m in ipairs(mods or {}) do
+  local a = tonumber(getAddress(m.Address))
+  log('  module ' .. tostring(m.Name) .. ' base=' .. hf(a))
+end
+log('  GameController.staticAddr = 0x6553E20')
+log('  SeinDeathCounter.staticAddr = 0x655B5B0')
+
+local function inst(cls, listName)
+  local ok, l = pcall(mono_class_findInstancesOfClassListOnly, dom, cls)
+  return ok and l or nil
+end
+
+-- 1) 两个 SeinCharacter 的判别：CloneOfSeinForPortals(20) 和 Controller(24)
+log('--- SeinCharacter instances')
+local scList = inst(byname['SeinCharacter'])
+for _, p in ipairs(scList or {}) do
+  log('SC=' .. hf(p))
+  log('  CloneOfSeinForPortals=' .. hf(readInteger(p + 20) or 0))
+  log('  Controller=' .. hf(readInteger(p + 24) or 0))
+  log('  Level=' .. hf(readInteger(p + 56) or 0))
+  local en = readInteger(p + 60)
+  if en and en ~= 0 then log('  Energy.Current=' .. tostring(readFloat(en + 32))) end
+end
+
+-- 2) SeinLevel 实例的 m_sein(32)
+log('--- SeinLevel instances')
+local lvlList = inst(byname['SeinLevel'])
+for _, p in ipairs(lvlList or {}) do
+  local sp = readInteger(p + 36) or 0
+  local ex = readInteger(p + 44) or 0
+  local ms = readInteger(p + 32) or 0
+  log('LVL=' .. hf(p) .. ' SkillPoints=' .. sp .. ' Exp=' .. ex .. ' m_sein=' .. hf(ms))
+end
+
+-- 3) SeinDeathCounter 实例内存 0..24 指针追类名
+log('--- SeinDeathCounter instance raw')
+local dAddr = mono_class_getStaticFieldAddress(0, byname['SeinDeathCounter'])
+local dPtr = readInteger(dAddr)
+log('inst=' .. hf(dPtr))
+for off = 0, 20, 4 do
+  local v = readInteger(dPtr + off)
+  if v and v > 0x10000 then
+    local okc, cn = pcall(mono_class_getName, mono_object_getClass(v))
+    log('  +' .. off .. ' = ' .. hf(v) .. ' class=' .. tostring(okc and cn or 'not-object'))
+  else
+    log('  +' .. off .. ' = ' .. tostring(v))
+  end
+end
+
+-- 4) SeinHealthController 的 MaxHealth 以 int32 读
+local hcList = inst(byname['SeinHealthController'])
+for _, p in ipairs(hcList or {}) do
+  log('HC=' .. hf(p) .. ' Amount(float)=' .. tostring(readFloat(p + 28)) .. ' MaxHealth(int)=' .. tostring(readInteger(p + 32)))
+end
+
+log('=== probe9 done ===')
+out:close()
+  </LuaScript>
+</CheatTable>
