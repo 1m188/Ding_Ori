@@ -186,35 +186,6 @@ type Region struct {
 	Size uint32
 }
 
-// WritablePrivateRegions 枚举已提交、可写的堆区域（含 mono 的 MEM_MAPPED 堆段）。
-// 注意: ① 保护属性须掩码低 8 位判断（高维修饰位会干扰精确匹配）；
-// ② 64 位 Windows 上 mono 的 32 位堆使用 MEM_MAPPED section 分配
-//    （实测 0x57913000 区域 type=MEM_MAPPED protect=PAGE_EXECUTE_READWRITE），
-//    因此不能限定 Type==MEM_PRIVATE，只要求可写即可。
-// ③ 游戏暂停/运行切换时区域保护属性可能变化，扫描场景请改用 ReadableRegions。
-func (p *Process) WritablePrivateRegions() []Region {
-	var out []Region
-	var addr uintptr
-	var m mbi
-	mbiLen := uintptr(unsafe.Sizeof(m))
-	for {
-		r1, _, _ := procVirtualQueryEx.Call(p.Handle, addr, uintptr(unsafe.Pointer(&m)), mbiLen)
-		if r1 == 0 {
-			break
-		}
-		baseProt := m.Protect & 0xFF
-		writable := baseProt == pageReadWrite || baseProt == pageWriteCopy || baseProt == 0x40 /*PAGE_EXECUTE_READWRITE*/
-		if m.State == memCommit && writable && m.Protect&pageGuard == 0 && m.RegionSize > 0 {
-			out = append(out, Region{Base: uint32(m.BaseAddress), Size: uint32(m.RegionSize)})
-		}
-		addr = m.BaseAddress + m.RegionSize
-		if addr >= 0x7FFF0000 {
-			break
-		}
-	}
-	return out
-}
-
 // ReadableRegions 枚举全部已提交且可读的区域（任意类型/保护，含映像）。
 // RPM 对只读页同样有效；对象扫描应使用本函数，避免游戏状态切换导致的
 // 区域保护属性时变造成漏扫。

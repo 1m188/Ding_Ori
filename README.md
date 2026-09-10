@@ -18,7 +18,7 @@
 
 | 键 | 作用 |
 |---|---|
-| 数字键 1-5 | 开关功能 |
+| 数字键 1-6 | 开关功能（6 为一命保护，仅终极版） |
 | HOME | 关闭全部 |
 | F12 | 重新附加/重扫 |
 | F1 | 帮助 |
@@ -34,8 +34,36 @@
 | 3 | 技能点冻结 | 写 42 → 拉回 1 | 写 42 → 1 秒内拉回 13 ✓ |
 | 4 | 经验冻结 | 升级结算写入被持续拉回 | 同结构（Exp=405 吻合） |
 | 5 | 死亡数冻结 | 写 777 → 500ms 拉回 | 同签名路径（deaths=98 吻合） |
+| 6 | **一命保护** | —（仅终极版） | 见下节 |
 
 冻结语义 = 激活瞬间捕获当前值并每 50ms 写回（风灵月影同款）。
+
+### 数字键 6：一命保护（终极版专用）
+
+让"一命通关"难度下的死亡行为与普通模式一致——**在上个检查点复活，存档不被销毁**，
+同时**保留一命通关成就（Unhinged / BeatOneLife）的获取资格**。
+
+原理（基于 DE v1.0 反编译源码）：
+
+| 源码位置 | 逻辑 |
+|---|---|
+| `SeinDamageReciever.OnKill` | `if (Difficulty == OneLife) { WasKilled=true; 存盘; 删光所有备份 }` |
+| `SeinDamageReciever.OnKillRoutine` | `if (Difficulty == OneLife) 弹 GameOver` else `淡出 → RestoreCheckpoint()` 复活 |
+| `AchievementsLogic.OnAct3End` | `switch (LowestDifficulty) { case OneLife: 授予成就 }` |
+
+一命清档与 GameOver 都只认 `Difficulty`，而成就只认 `LowestDifficulty`。
+本功能因此**每秒 20 次把 `Difficulty` 锁为 Normal(1)，绝不触碰 `LowestDifficulty`(保持 OneLife=3)**。
+
+**验证状态**：
+- ✓ 锁定生效（3→1，持续稳定，游戏未回写）；✓ `LowestDifficulty` 始终保持 3；
+- ✓ 纠正能力：手动把 `Difficulty` 写回 OneLife 后，**300ms 内被自动纠正回 Normal**；
+- ⚠ 未做端到端实测：真实死亡后的画面表现、存档写盘重载后 `LowestDifficulty` 的值
+  （需正常游玩到有伤害区域/检查点才能验证）。首次实战前建议先用新建的一命存档试跑。
+
+**已知副作用**：存档列表的难度标签可能显示为"普通"（因 `SaveSlotInfo.Difficulty` 同步的是被锁值），
+但成就判定读 `LowestDifficulty`，不受影响。
+
+**使用建议**：一命通关全程开启即可；如担心意外，可配合游戏的"备份"功能手动存档。
 
 ## 地址方案（重要：为什么不用 CE 表 / FLiNG 提取）
 

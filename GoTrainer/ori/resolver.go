@@ -20,6 +20,7 @@ type Runtime struct {
 	SeinLevel     uint32 // 活体 SeinLevel 实例（m_sein != 0）
 	SeinCharacter uint32 // 活体 SeinCharacter（= SeinLevel.m_sein）
 	DeathCounter  uint32 // SeinDeathCounter 实例
+	DiffController uint32 // DifficultyController 实例（一命保护用）
 
 	LastScanError string
 }
@@ -32,6 +33,7 @@ func (r *Runtime) SetProcess(p *core.Process) {
 	r.SeinLevel = 0
 	r.SeinCharacter = 0
 	r.DeathCounter = 0
+	r.DiffController = 0
 	r.LastScanError = ""
 }
 
@@ -40,6 +42,27 @@ func (r *Runtime) HasSein() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.SeinLevel != 0 && r.SeinCharacter != 0
+}
+
+// DiffAddress 返回 DifficultyController.Difficulty 字段地址（一命保护用）。
+// 注意: 只暴露 Difficulty 字段地址，调用方绝不应触碰 +0x1C 的 LowestDifficulty。
+func (r *Runtime) DiffAddress() (uint32, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.DiffController == 0 {
+		return 0, false
+	}
+	return r.DiffController + OffDiffDifficulty, true
+}
+
+// LowestDiffAddress 返回 LowestDifficulty 字段地址（只读校验用）。
+func (r *Runtime) LowestDiffAddress() (uint32, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.DiffController == 0 {
+		return 0, false
+	}
+	return r.DiffController + OffDiffLowest, true
 }
 
 // SlotsValid 兼容字段（历史遗留，现恒 true）。
@@ -69,8 +92,16 @@ func (r *Runtime) ScanObjects() error {
 		x  uint32
 		ms uint32
 	}
+	type diffCand struct {
+		x   uint32
+		cls uint32
+		d1  uint32
+		d2  uint32
+		del uint32
+	}
 	var lvlCands []lvlCand
 	var deathCands []uint32
+	var diffCands []diffCand
 
 	for _, reg := range regs {
 		for base := uint64(reg.Base); base < uint64(reg.Base)+uint64(reg.Size); base += chunk {
@@ -102,6 +133,29 @@ func (r *Runtime) ScanObjects() error {
 						deathCands = append(deathCands, x)
 					}
 				}
+
+				// --- DifficultyController 快筛（一命保护用）---
+				// 结构（CE findInstances 权威 dump）:
+				//   +0x00 类指针  +0x04==0  +0x08..+0x14 管理指针
+				//   +0x18 Difficulty  +0x1C LowestDifficulty  +0x20 delegate
+				//   +0x24==0  +0x28/+0x2C 管理指针
+				// 强判别: +0x0C/+0x10/+0x14 必须是真实堆地址（>= 0x40000000），
+				//   用来排除 3F800000/BF800000/FFFFFFFF 这类浮点常量位模式巧合。
+				{
+					d1 := u32at(buf, off+OffDiffDifficulty)
+					d2 := u32at(buf, off+OffDiffLowest)
+					if d1 <= DiffOneLife && d2 <= DiffOneLife &&
+						u32at(buf, off+4) == 0 && u32at(buf, off) >= 0x20000000 &&
+						u32at(buf, off+0x24) == 0 &&
+						u32at(buf, off+0x0C) >= 0x40000000 &&
+						u32at(buf, off+0x10) >= 0x40000000 &&
+						u32at(buf, off+0x14) >= 0x40000000 &&
+						u32at(buf, off+OffDiffDelegate) >= 0x20000000 {
+						diffCands = append(diffCands, diffCand{
+							x: x, cls: u32at(buf, off), d1: d1, d2: d2, del: u32at(buf, off+OffDiffDelegate),
+						})
+					}
+				}
 			}
 		}
 	}
@@ -121,8 +175,10 @@ func (r *Runtime) ScanObjects() error {
 		if !ok2 || en == 0 {
 			continue
 		}
+		// 注意: Energy.Max 允许为 0 —— 游戏早期（尚未获得能量容器时）
+		// 上限就是 0，硬性要求 >=1 会导致新存档扫描失败。
 		mx, ok3 := p.ReadF32(en + OffEnergyMax)
-		if !ok3 || mx < EnergyMaxMin || mx > EnergyMaxMax {
+		if !ok3 || mx < 0 || mx > EnergyMaxMax {
 			continue
 		}
 		mor, ok4 := p.ReadU32(c.ms + OffSeinMortality)
@@ -134,7 +190,7 @@ func (r *Runtime) ScanObjects() error {
 			continue
 		}
 		maxhp, ok6 := p.ReadI32(h + OffHealthMaxHealth)
-		if !ok6 || maxhp < MaxHealthMin || maxhp > MaxHealthMax {
+		if !ok6 || maxhp < 4 || maxhp > MaxHealthMax {
 			continue
 		}
 		liveLevel, liveSein = c.x, c.ms
@@ -154,10 +210,52 @@ func (r *Runtime) ScanObjects() error {
 		}
 	}
 
+	// --- 阶段2: DifficultyController 定位 ---
+	// 首选: Instance 静态字段的真实存储地址（实测可直接读取，返回权威实例指针）。
+	//   该地址由 CE AOB 反查"指向实例的引用"得到，与 CE 的 mono 视图一致。
+	// 回退: 堆扫描候选（当静态槽因版本差异失效时使用）。
+	var liveDiff uint32
+	if inst, ok := p.ReadU32(StaticDiffController); ok && inst > 0x10000 {
+		// 自检: 难度值必须合法，否则视为无效指针
+		if d1, ok1 := p.ReadI32(inst + OffDiffDifficulty); ok1 && d1 >= 0 && d1 <= DiffOneLife {
+			if d2, ok2 := p.ReadI32(inst + OffDiffLowest); ok2 && d2 >= 0 && d2 <= DiffOneLife {
+				liveDiff = inst
+			}
+		}
+	}
+	if liveDiff == 0 && len(diffCands) > 0 {
+		// 回退: 堆扫描（delegate 频次 + 堆地址约束）
+		freq := map[uint32]int{}
+		for _, c := range diffCands {
+			freq[c.del]++
+		}
+		bestDel, bestN := uint32(0), 0
+		for del, n := range freq {
+			if n > bestN {
+				bestDel, bestN = del, n
+			}
+		}
+		for _, c := range diffCands {
+			if c.del == bestDel && c.d1 == c.d2 {
+				liveDiff = c.x
+				break
+			}
+		}
+		if liveDiff == 0 {
+			for _, c := range diffCands {
+				if c.del == bestDel {
+					liveDiff = c.x
+					break
+				}
+			}
+		}
+	}
+
 	r.mu.Lock()
 	r.SeinLevel = liveLevel
 	r.SeinCharacter = liveSein
 	r.DeathCounter = liveDeath
+	r.DiffController = liveDiff
 	if liveLevel == 0 {
 		r.LastScanError = fmt.Sprintf("扫描完成未找到活体 SeinLevel（候选 %d）—— 请进入存档后 F12 重扫", len(lvlCands))
 	} else {
@@ -223,4 +321,11 @@ func (r *Runtime) Read() Snapshot {
 		}
 	}
 	return s
+}
+
+// SeinCharacterAddr 返回已定位的 SeinCharacter 地址（测试/诊断用）。
+func (r *Runtime) SeinCharacterAddr() uint32 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.SeinCharacter
 }

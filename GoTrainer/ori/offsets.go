@@ -79,6 +79,28 @@ const (
 
 	// SeinDeathCounter
 	OffDeathCounterValue = 0x14
+
+	// DifficultyController（一命保护用）
+	// 注意: OffDiffLowest 只用于只读校验，任何情况下都不得写入 ——
+	// 它是成就资格判定的唯一依据（见 AchievementsLogic.OnAct3End）。
+	OffDiffDifficulty = 0x18
+	OffDiffLowest     = 0x1C
+	OffDiffDelegate   = 0x20
+)
+
+// 一命保护相关常量。
+const (
+	// DifficultyMode 枚举值
+	DiffEasy    = 0
+	DiffNormal  = 1
+	DiffHard    = 2
+	DiffOneLife = 3
+
+	// StaticDiffController = DifficultyController.Instance 静态字段的真实存储地址。
+	// 实测该地址可被外部进程直接读取，返回权威实例指针（与 CE mono 视图一致）。
+	// 获取方式: CE AOB 反查"指向活体实例的引用"，命中项之一即此静态槽。
+	// 若游戏版本变更导致失效，resolver 会自动回退到堆扫描路线。
+	StaticDiffController = 0x061F3D20
 )
 
 // 活体判别阈值（堆扫描加固验证）。

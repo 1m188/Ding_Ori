@@ -212,8 +212,25 @@ func renderTrainer(a *app, s *session) {
 			box, cWhite, f.Num, cReset, f.Name, stCol, st, cReset))
 	}
 
+	// 一命保护（数字键 6，仅终极版生效）
+	ol := ori.OneLife()
+	box := cWhite + "[ ]" + cReset
+	if ol.Active() {
+		box = cGreen + "[x]" + cReset
+	}
+	st := ol.Status()
+	stCol := cDim
+	switch {
+	case strings.HasPrefix(st, "已锁定"), strings.HasPrefix(st, "保护中"):
+		stCol = cGreen
+	case st != "未激活":
+		stCol = cRed
+	}
+	b.WriteString(fmt.Sprintf("  %s  %s数字键 6%s   %s   %s%s%s\n",
+		box, cWhite, cReset, ol.Name(), stCol, st, cReset))
+
 	b.WriteString(cBox + "  ────────────────────────────────────────────────────────\n" + cReset)
-	b.WriteString("  " + cWhite + "数字键 1-5" + cReset + " 开关功能   " + cWhite + "HOME" + cReset + " 关闭全部   " +
+	b.WriteString("  " + cWhite + "数字键 1-6" + cReset + " 开关功能   " + cWhite + "HOME" + cReset + " 关闭全部   " +
 		cWhite + "F12" + cReset + " 重新附加/重扫   " + cWhite + "F1" + cReset + " 帮助   " +
 		cWhite + "ESC" + cReset + " 返回选择   " + cWhite + "END" + cReset + " 退出\n")
 	b.WriteString("  " + cDim + a.getMsg() + cReset + "\n")
@@ -376,6 +393,17 @@ func main() {
 						}
 					}
 				}
+			}
+		}
+		// 数字键 6: 一命保护（仅终极版有意义）
+		if keys.pressed(0x36) {
+			ol := ori.OneLife()
+			newState := !ol.Active()
+			ol.SetActive(newState)
+			if newState {
+				a.setMsg("已激活: 一命保护 — 死亡将如普通模式一样在检查点复活，成就资格保留")
+			} else {
+				a.setMsg("已关闭: 一命保护")
 			}
 		}
 
