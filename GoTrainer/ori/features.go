@@ -1,4 +1,5 @@
 // Package ori —— 冻结型功能: 激活时捕获当前值，之后每 tick 写回。
+// 功能表两版通用（DE 的字段偏移与原版一致，经堆扫描定位）。
 package ori
 
 import (
@@ -8,7 +9,7 @@ import (
 
 // Feature 一个可开关的冻结功能。
 type Feature struct {
-	Num    int    // 热键数字 1..6 / 0
+	Num    int    // 热键数字 1..5
 	Name   string
 	active atomic.Bool
 	capI   atomic.Int32
@@ -41,10 +42,12 @@ func (f *Feature) Status() string { return f.status.Load().(string) }
 
 func (f *Feature) setStatus(s string) { f.status.Store(s) }
 
+type ticker interface{ Tick(r *Runtime) }
+
 // freezeInt 冻结整型字段。
 type freezeInt struct {
-	f     *Feature
-	get   func(r *Runtime) (uint32, bool) // 返回字段地址
+	f   *Feature
+	get func(r *Runtime) (uint32, bool)
 }
 
 func (g *freezeInt) Tick(r *Runtime) {
@@ -107,8 +110,12 @@ func (g *freezeFloat) Tick(r *Runtime) {
 	}
 }
 
-// BuildFeatures 构建默认功能表（顺序即热键 1..5）。
+var allTickers []ticker
+
+// BuildFeatures 构建功能表（热键 1..5，两版同名同键位）。
 func BuildFeatures() []*Feature {
+	allTickers = nil
+
 	lvlSP := func(r *Runtime) (uint32, bool) {
 		if r.SeinLevel == 0 {
 			return 0, false
@@ -154,14 +161,12 @@ func BuildFeatures() []*Feature {
 
 	fi := func(num int, name string, get func(*Runtime) (uint32, bool)) *Feature {
 		f := NewFeature(num, name)
-		t := &freezeInt{f: f, get: get}
-		fTickers = append(fTickers, t)
+		allTickers = append(allTickers, &freezeInt{f: f, get: get})
 		return f
 	}
 	ff := func(num int, name string, get func(*Runtime) (uint32, bool)) *Feature {
 		f := NewFeature(num, name)
-		t := &freezeFloat{f: f, get: get}
-		fTickers = append(fTickers, t)
+		allTickers = append(allTickers, &freezeFloat{f: f, get: get})
 		return f
 	}
 
@@ -174,12 +179,9 @@ func BuildFeatures() []*Feature {
 	}
 }
 
-// fTickers 全部功能的 tick 实现（BuildFeatures 内注册）。
-var fTickers []interface{ Tick(*Runtime) }
-
 // TickAll 驱动所有激活功能。
-func TickAll(fs []*Feature, r *Runtime) {
-	for _, t := range fTickers {
+func TickAll(r *Runtime) {
+	for _, t := range allTickers {
 		t.Tick(r)
 	}
 }

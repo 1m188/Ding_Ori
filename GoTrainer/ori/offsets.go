@@ -1,45 +1,58 @@
-// Package ori 地址常量 —— 全程序唯一地址维护点。
+// Package ori —— 地址常量与运行时结构（原版 + 终极版通用）。
 //
-// 目标: 原版《Ori and the Blind Forest》Steam 最终构建
-//       (buildid 814852 / Build Number 5474 / Unity 5.0.0 32位 Mono)
+// 两版游戏同为 Unity Mono 32 位，类结构经 CE mono dissect 考古：
+// 字段偏移两版完全一致，仅类静态槽/堆区域位置不同（因此运行期
+// 全部依赖堆扫描定位，不依赖静态槽——CE 的静态槽地址位于
+// MonoDataCollector 注入层，外部读取为 MEM_FREE，不可用）。
 //
-// 地址考古方法: Cheat Engine 7.6 mono dissect (mono_image_enumClasses
-// + mono_class_enumFields + mono_class_getStaticFieldAddress)，
-// 并已实测验证: 游戏重启后(不同 PID)类静态槽绝对地址不变
-// (mono 运行时对 class static storage 采用确定性分配)。
+// 原版:  ori.exe   (appid 261570, buildid 814852, Unity 5.0.0)
+// 终极版: oriDE.exe (appid 387290, buildid 1096284, Unity 5.3.2)
 //
-// 指针结构(全部 4 字节指针, 32 位进程):
+// 指针结构（两版相同，4 字节指针）:
 //
-//	GameController 静态槽  [0x06553E20] -> Instance* -> +0x64 GameTime(float)
-//	SeinDeathCounter 静态槽 [0x0655B5B0] -> Instance* -> +0x14 m_deathCounter(int)
+//	SeinCharacter: +0x38 Level*(→SeinLevel) +0x3C Energy*(→SeinEnergy)
+//	               +0x40 Mortality*(→SeinMortality)
+//	SeinLevel:     +0x20 m_sein*(回指本体,克隆/副本为0)
+//	               +0x24 SkillPoints(int) +0x2C Experience(int)
+//	SeinEnergy:    +0x20 Current(float) +0x24 Max(float)
+//	SeinMortality: +0x0C Health*(→SeinHealthController)
+//	SeinHealthController: +0x1C Amount(float) +0x20 MaxHealth(int)
+//	SeinDeathCounter: +0x14 m_deathCounter(int)
 //
-//	SeinCharacter (堆中两实例: 本体 + 传送门克隆):
-//	  +0x10 Abilities*   +0x18 Controller*   +0x38 Level*(→SeinLevel)
-//	  +0x3C Energy*(→SeinEnergy)  +0x40 Mortality*(→SeinMortality)
-//	SeinEnergy:   +0x20 Current(float)  +0x24 Max(float)
-//	SeinMortality:+0x0C Health*(→SeinHealthController)
-//	SeinHealthController: +0x1C Amount(float)  +0x20 MaxHealth(int)
-//	SeinLevel:    +0x20 m_sein*(指回本体 SeinCharacter, 克隆为 0)
-//	              +0x24 SkillPoints(int) +0x2C Experience(int)
+// 活体判别（堆扫描签名）:
+//   - SeinLevel 回指: u32(X+0x20)=P 且 u32(P+0x38)==X
+//   - 加固: Energy.Max∈[1,50] 且 Health.MaxHealth∈[12,400]
+//     （排除传送门克隆/UI 副本/教学对象）
+//   - DE 的 mono 大堆位于 64 位地址空间高位（0x80000000+，WoW64 影子区），
+//     区域枚举须使用 64 位视图（见 core.ReadableRegions）。
 //
-// 本体/克隆判别: SeinLevel.m_sein != 0 (克隆的 m_sein==0)。
-// 数值验证记录: 死亡数 333 与界面一致; GameTime 10939.6s ≈ 存档 05:11;
-// SkillPoints=1 与能力树紫点一致; Energy 0.5/5.0 与 HUD 一致。
+// 数值验证记录:
+//   原版: 死亡333 / GameTime 10939s≈存档05:11 / SP=1 / Exp=1187 / 能量0.5/5.0
+//   DE:   SP=13 / Exp=405 / 能量1.0/2.0 / 血16/16 / 死亡98
 package ori
 
-// 类静态槽绝对地址（mono 确定性分配，已实测跨重启稳定）。
+// 版本定义。
+type Version int
+
 const (
-	StaticGameController   = 0x06553E20 // -> GameController.Instance
-	StaticSeinDeathCounter = 0x0655B5B0 // -> SeinDeathCounter.Instance
+	Vanilla Version = iota
+	Definitive
 )
 
-// 目标进程与模块名。
-const (
-	ProcessName = "ori.exe"
-	ModuleMono  = "mono.dll"
-)
+// Profile 每个版本的目标信息。
+type Profile struct {
+	Version     Version
+	ProcessName string
+	DisplayName string
+}
 
-// 字段偏移（字节）。
+// Profiles 版本 -> 目标信息。
+var Profiles = map[Version]Profile{
+	Vanilla:    {Vanilla, "ori.exe", "原版 (ori.exe)"},
+	Definitive: {Definitive, "oriDE.exe", "终极版 (oriDE.exe)"},
+}
+
+// 字段偏移（两版一致，字节）。
 const (
 	// SeinCharacter
 	OffSeinAbilities  = 0x10
@@ -64,9 +77,16 @@ const (
 	OffLevelSkillPoints = 0x24
 	OffLevelExperience  = 0x2C
 
-	// GameController
-	OffGameTime = 0x64
-
 	// SeinDeathCounter
 	OffDeathCounterValue = 0x14
+)
+
+// 活体判别阈值（堆扫描加固验证）。
+const (
+	EnergyMaxMin   = 1.0
+	EnergyMaxMax   = 50.0
+	MaxHealthMin   = 12
+	MaxHealthMax   = 400
+	MaxSkillPoints = 99
+	MaxExperience  = 999999
 )

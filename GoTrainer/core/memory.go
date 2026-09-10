@@ -218,21 +218,31 @@ func (p *Process) WritablePrivateRegions() []Region {
 // ReadableRegions 枚举全部已提交且可读的区域（任意类型/保护，含映像）。
 // RPM 对只读页同样有效；对象扫描应使用本函数，避免游戏状态切换导致的
 // 区域保护属性时变造成漏扫。
+//
+// WoW64 注意: 32 位目标进程的 mono 大堆位于 64 位地址空间的高位
+// （如 0x800265C0，RPM 可正常读写），但 32 位视角的 VQEx 看不到它。
+// 本程序是 64 位进程，VQEx 返回的是 64 位视图（BaseAddress 高位为
+// 0xFFFFFFFF_xxxxxxxx），枚举上限必须放宽到 64 位，Region 取低 32 位。
 func (p *Process) ReadableRegions() []Region {
 	var out []Region
-	var addr uintptr
+	var addr uint64
 	var m mbi
 	mbiLen := uintptr(unsafe.Sizeof(m))
 	for {
-		r1, _, _ := procVirtualQueryEx.Call(p.Handle, addr, uintptr(unsafe.Pointer(&m)), mbiLen)
+		r1, _, _ := procVirtualQueryEx.Call(p.Handle, uintptr(addr), uintptr(unsafe.Pointer(&m)), mbiLen)
 		if r1 == 0 {
 			break
 		}
 		if m.State == memCommit && m.Protect != pageNoAccess && m.Protect&pageGuard == 0 && m.RegionSize > 0 {
-			out = append(out, Region{Base: uint32(m.BaseAddress), Size: uint32(m.RegionSize)})
+			// 只取低 32 位有内容的区域（WoW64 的高位影子区形如 0xFFFFFFFF80026000）
+			base := uint64(m.BaseAddress) & 0xFFFFFFFF
+			size := m.RegionSize
+			if base != 0 && size > 0 && base+uint64(size) <= 0x100000000 {
+				out = append(out, Region{Base: uint32(base), Size: uint32(size)})
+			}
 		}
-		addr = m.BaseAddress + m.RegionSize
-		if addr >= 0x7FFF0000 {
+		addr = uint64(m.BaseAddress) + uint64(m.RegionSize)
+		if addr >= 0x800000000000 {
 			break
 		}
 	}

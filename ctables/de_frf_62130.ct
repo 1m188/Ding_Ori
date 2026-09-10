@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CheatTable CheatEngineTableVersion="45">
+  <CheatEntries>
+    <CheatEntry>
+      <ID>104096</ID>
+      <Description>"Keystones"</Description>
+      <VariableType>Auto Assembler Script</VariableType>
+      <AssemblerScript>[ENABLE]
+aobscan(aob_keystones,8B 40 2C 8B 40 1C 50 DB 04 24)
+label(keystonesregsymb)
+registersymbol(keystonesregsymb)
+alloc(newmem_keystones,1024)
+label(return_keystones)
+
+newmem_keystones:
+  mov [eax+1C], 2
+  mov eax,[eax+1C]
+  push eax
+  fild dword ptr [esp]
+  jmp return_keystones
+
+aob_keystones+3:
+keystonesregsymb:
+  jmp newmem_keystones
+  nop
+  nop
+return_keystones:
+[DISABLE]
+keystonesregsymb:
+  db 8B 40 1C 50 DB 04 24
+
+unregistersymbol(keystonesregsymb)
+dealloc(newmem_keystones)
+
+</AssemblerScript>
+    </CheatEntry>
+    <CheatEntry>
+      <ID>16273</ID>
+      <Description>"More CHEATS AVAILABLE HERE"</Description>
+      <Color>0000FF</Color>
+      <VariableType>Auto Assembler Script</VariableType>
+      <AssemblerScript>{$LUA}
+  if syntaxcheck then return end
+  [ENABLE]
+
+--Updated table! (Start)
+    --messageDialog('Enable Dark Mode?', mtInformation,mbYes,mbNo)
+    if messageDialog("Updated table with more cheats available!\r\n\r\nYou will need Mod Engine to get more cheats and the new updated table\r\n\r\nDownload Mod Engine?", mtConfirmation, mbYes, mbNo) ==mrYes then
+       shellExecute("https://modengine.net")
+    else
+    end
+--Updated table! (End)
+  [DISABLE]
+
+</AssemblerScript>
+    </CheatEntry>
+  </CheatEntries>
+  <UserdefinedSymbols/>
+  <LuaScript>--Updated table! (Start)
+    --messageDialog('Enable Dark Mode?', mtInformation,mbYes,mbNo)
+    if messageDialog("Updated table with more cheats available!\r\n\r\nYou will need Mod Engine to get more cheats and the new updated table\r\n\r\nDownload Mod Engine?", mtConfirmation, mbYes, mbNo) ==mrYes then
+       shellExecute("https://modengine.net")
+    else
+    end
+--Updated table! (End)
+
+
+
+
+</LuaScript>
+</CheatTable>

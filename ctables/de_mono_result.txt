@@ -1,0 +1,20 @@
+=== DE probe2: findInstances ===
+SeinLevel instances: 2
+  0x6D445A40 class=SeinLevel m_sein=0x0 SP=0 Exp=0
+  0x800265C0 class=SeinLevel m_sein=0x80040DE0 SP=13 Exp=405
+SeinCharacter instances: 2
+  0x5A8AEAE0 class=SeinCharacter Level=0x6D445A40 Energy*=0x5A82B280 Mortality*=0x6D5E2FA8 E=3.00/3.00
+  0x80040DE0 class=SeinCharacter Level=0x800265C0 Energy*=0x8001DB40 Mortality*=0x80045D98 E=1.00/2.00
+SeinEnergy instances: 2
+  0x5A82B280 class=SeinEnergy E=3.00/3.00
+  0x8001DB40 class=SeinEnergy E=1.00/2.00
+SeinHealthController instances: 2
+  0x6D2F6450 class=SeinHealthController HP=16.0/16
+  0x6D45F600 class=SeinHealthController HP=12.0/12
+SeinDeathCounter instances: 2
+  0x6D446BE8 class=SeinDeathCounter deaths=0
+  0x80045E40 class=SeinDeathCounter deaths=98
+SeinMortality instances: 2
+  0x6D5E2FA8 class=SeinMortality
+  0x80045D98 class=SeinMortality
+=== DE probe2 done ===

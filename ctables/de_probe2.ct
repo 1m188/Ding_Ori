@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CheatTable CheatEngineTableVersion="41">
+  <LuaScript>
+local out = io.open('D:/code/Ding_Ori/ctables/de_mono_result.txt', 'w')
+local function log(s) out:write(tostring(s) .. '\n') out:flush() end
+local function hf(x) return string.format('0x%X', tonumber(x) or 0) end
+
+log('=== DE probe2: findInstances ===')
+openProcess('oriDE.exe')
+local dc = LaunchMonoDataCollector()
+
+local img = nil
+for _, a in ipairs(mono_enumAssemblies() or {}) do
+  local im = mono_getImageFromAssembly(a)
+  if mono_image_get_name(im) == 'Assembly-CSharp' then img = im end
+end
+local byname = {}
+for _, c in ipairs(mono_image_enumClasses(img) or {}) do
+  byname[tostring(c.classname or '')] = c.class
+end
+local dom = mono_enumDomains()[1]
+
+local names = {'SeinLevel','SeinCharacter','SeinEnergy','SeinHealthController','SeinDeathCounter','SeinMortality'}
+for _, name in ipairs(names) do
+  local cls = byname[name]
+  if cls then
+    local ok, insts = pcall(mono_class_findInstancesOfClassListOnly, dom, cls)
+    if not ok then
+      log(name .. ' findInstances err: ' .. tostring(insts))
+    else
+      log(name .. ' instances: ' .. tostring(insts and #insts or 0))
+      for _, ptr in ipairs(insts or {}) do
+        local line = '  ' .. hf(ptr)
+        local cls2 = mono_object_getClass(ptr)
+        local okn, cn = pcall(mono_class_getName, cls2)
+        line = line .. ' class=' .. tostring(okn and cn or '?')
+        if name == 'SeinLevel' then
+          local ms = readInteger(ptr + 0x20)
+          local sp = readInteger(ptr + 0x24)
+          local ex = readInteger(ptr + 0x2C)
+          line = line .. string.format(' m_sein=%s SP=%s Exp=%s', hf(ms or 0), tostring(sp), tostring(ex))
+        elseif name == 'SeinCharacter' then
+          local lvl = readInteger(ptr + 0x38)
+          local en = readInteger(ptr + 0x3C)
+          local mor = readInteger(ptr + 0x40)
+          line = line .. string.format(' Level=%s Energy*=%s Mortality*=%s', hf(lvl or 0), hf(en or 0), hf(mor or 0))
+          if en ~= nil and en ~= 0 then
+            local ec = readFloat(en + 0x20)
+            local em = readFloat(en + 0x24)
+            line = line .. string.format(' E=%.2f/%.2f', ec or -1, em or -1)
+          end
+        elseif name == 'SeinEnergy' then
+          local ec = readFloat(ptr + 0x20)
+          local em = readFloat(ptr + 0x24)
+          line = line .. string.format(' E=%.2f/%.2f', ec or -1, em or -1)
+        elseif name == 'SeinHealthController' then
+          local a = readFloat(ptr + 0x1C)
+          local mh = readInteger(ptr + 0x20)
+          line = line .. string.format(' HP=%.1f/%s', a or -1, tostring(mh))
+        elseif name == 'SeinDeathCounter' then
+          local d = readInteger(ptr + 0x14)
+          line = line .. string.format(' deaths=%s', tostring(d))
+        end
+        log(line)
+      end
+    end
+  else
+    log(name .. ' NOT FOUND')
+  end
+end
+
+log('=== DE probe2 done ===')
+out:close()
+  </LuaScript>
+</CheatTable>
