@@ -3,6 +3,7 @@ package ori
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"sync"
 	"time"
@@ -22,7 +23,27 @@ type Runtime struct {
 	DeathCounter  uint32 // SeinDeathCounter 实例
 	DiffController uint32 // DifficultyController 实例（一命保护用）
 
+	// 子状态对象（ScanSubObjects 用"回指 Sein"签名定位）
+	SoulFlame  uint32 // SeinSoulFlame（+0x64 -> Sein）
+	SeinJump   uint32 // SeinJump（+0x40 -> Sein）
+	DoubleJump uint32 // SeinDoubleJump（+0x30 -> Sein）
+
 	LastScanError string
+}
+
+// SubAddr 返回已定位子对象的地址（诊断/测试用）。
+func (r *Runtime) SubAddr(which string) uint32 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	switch which {
+	case "soulflame":
+		return r.SoulFlame
+	case "jump":
+		return r.SeinJump
+	case "doublejump":
+		return r.DoubleJump
+	}
+	return 0
 }
 
 // SetProcess 绑定进程并重置解析状态。
@@ -34,6 +55,9 @@ func (r *Runtime) SetProcess(p *core.Process) {
 	r.SeinCharacter = 0
 	r.DeathCounter = 0
 	r.DiffController = 0
+	r.SoulFlame = 0
+	r.SeinJump = 0
+	r.DoubleJump = 0
 	r.LastScanError = ""
 }
 
@@ -266,8 +290,101 @@ func (r *Runtime) ScanObjects() error {
 	if liveLevel == 0 {
 		return fmt.Errorf("未找到活体 SeinLevel")
 	}
+
+	// 子状态对象（跳跃/二段跳/灵魂链接）—— 依赖 SeinCharacter 已定位
+	r.ScanSubObjects()
+
 	_ = start
 	return nil
+}
+
+// ScanSubObjects 定位 SeinCharacter 的子状态对象。
+// 方法: 这些对象的某个字段指回 SeinCharacter（回指签名），
+// 再加物理参数合理性校验，纯外部定位、不依赖静态槽。
+//
+// 已知回指偏移（CE mono dissect 实测）:
+//
+//	SeinSoulFlame.m_sein    @ +0x64
+//	SeinJump.Sein           @ +0x40
+//	SeinDoubleJump.Sein     @ +0x30
+func (r *Runtime) ScanSubObjects() {
+	r.mu.Lock()
+	p, sein := r.Proc, r.SeinCharacter
+	r.mu.Unlock()
+	if p == nil || sein == 0 {
+		return
+	}
+
+	var soul, jump, dbl uint32
+
+	for _, reg := range p.ReadableRegions() {
+		for base := uint64(reg.Base); base < uint64(reg.Base)+uint64(reg.Size); base += chunk {
+			sz := chunk
+			if remain := int(uint64(reg.Base) + uint64(reg.Size) - base); sz > remain {
+				sz = remain
+			}
+			buf := make([]byte, sz)
+			if !p.ReadBytes(uint32(base), buf) {
+				continue
+			}
+			for off := 0; off+0xB0 <= sz; off += 4 {
+				x := uint32(base) + uint32(off)
+
+				// SeinSoulFlame（严格判据，防假阳性）:
+				//   m_sein@+0x64 == Sein
+				//   CooldownDuration@+0xA8 ∈ [5,300]（类默认 60，实测 20）
+				//   HoldDownDuration@+0x98 ∈ [0.1,10]（类默认 0.7）
+				//   m_numberOfSoulFlamesCast@+0x90 <= 1000（计数值，排除垃圾数据）
+				if soul == 0 && u32at(buf, off+0x64) == sein {
+					cd := f32at(buf, off+0xA8)
+					hd := f32at(buf, off+0x98)
+					cast := u32at(buf, off+0x90)
+					if cd >= 5 && cd <= 300 && hd >= 0.1 && hd <= 10 && cast <= 1000 {
+						soul = x
+					}
+				}
+				// SeinJump（严格判据）:
+				//   Sein@+0x40 == Sein，且 4 个跳跃高度参数都在 [1,10]
+				//   （类默认: Backflip=3, Crouch=4.5, First=3, Second=3.75）
+				if jump == 0 && u32at(buf, off+0x40) == sein {
+					a := f32at(buf, off+0x54)
+					b := f32at(buf, off+0x58)
+					c := f32at(buf, off+0x60)
+					d := f32at(buf, off+0x70)
+					inRange := func(v float32) bool { return v >= 1 && v <= 10 }
+					if inRange(a) && inRange(b) && inRange(c) && inRange(d) {
+						jump = x
+					}
+				}
+				// SeinDoubleJump（严格判据，与 CE findInstances 权威值对齐）:
+				//   Sein@+0x30 == Sein（本体的那个实例）
+				//   JumpStrength@+0x38 == 10.0（类默认值，实测恒定）
+				//   m_numberOfJumpsAvailable@+0x40 放宽到 <= 100000
+				//     （"无限二段跳"功能会把它写成大值，不能作为上限约束）
+				if dbl == 0 && u32at(buf, off+0x30) == sein {
+					st := f32at(buf, off+0x38)
+					if st >= 9.5 && st <= 10.5 {
+						dbl = x
+					}
+				}
+			}
+		}
+		if soul != 0 && jump != 0 && dbl != 0 {
+			break
+		}
+	}
+
+	r.mu.Lock()
+	r.SoulFlame = soul
+	r.SeinJump = jump
+	r.DoubleJump = dbl
+	r.mu.Unlock()
+}
+
+// f32at 从缓冲区读 float32。
+func f32at(buf []byte, off int) float32 {
+	bits := uint32(buf[off]) | uint32(buf[off+1])<<8 | uint32(buf[off+2])<<16 | uint32(buf[off+3])<<24
+	return math.Float32frombits(bits)
 }
 
 // Snapshot 一致性快照（TUI 渲染用）。
@@ -335,4 +452,11 @@ func (r *Runtime) DeathCounterAddr() uint32 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.DeathCounter
+}
+
+// SeinLevelAddr 返回已定位的 SeinLevel 地址（诊断用）。
+func (r *Runtime) SeinLevelAddr() uint32 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.SeinLevel
 }

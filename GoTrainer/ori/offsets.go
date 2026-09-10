@@ -86,6 +86,46 @@ const (
 	OffDiffDifficulty = 0x18
 	OffDiffLowest     = 0x1C
 	OffDiffDelegate   = 0x20
+
+	// ---- SeinCharacter 子对象引用（用于定位新功能的载体对象）----
+	OffSeinSoulFlame    = 0x28 // SeinCharacter +0x28 -> SeinSoulFlame
+	OffSeinPlatformBeh  = 0x48 // SeinCharacter +0x48 -> PlatformBehaviour
+	OffSeinInput        = 0x34 // SeinCharacter +0x34 -> SeinInput
+	OffSeinPlayerAbil   = 0x4C // SeinCharacter +0x4C -> PlayerAbilities
+)
+
+// SeinSoulFlame 字段偏移（灵魂链接: 冷却/安全区域）。
+// 来源: CE mono dissect dump（DE v1.0）。
+const (
+	OffSoulFlameCooldownRemaining = 0xB0 // m_cooldownRemaining (float) —— 归零=无冷却
+	OffSoulFlameCooldownDuration  = 0xA8 // CooldownDuration (float)
+	OffSoulFlameLock              = 0xA4 // LockSoulFlame (bool) —— 置0解除锁定
+	OffSoulFlameCastCount         = 0x90 // m_numberOfSoulFlamesCast
+	OffSoulFlameHoldDown          = 0x94 // m_holdDownTime
+)
+
+// SeinJump 字段偏移（跳跃强化）。
+const (
+	OffJumpBackflipHeight = 0x54 // BackflipJumpHeight (float)
+	OffJumpCrouchHeight   = 0x58 // CrouchJumpHeight (float)
+	OffJumpFirstHeight    = 0x60 // FirstJumpHeight (float) —— 普通跳跃高度
+	OffJumpIdleHeight     = 0x64 // JumpIdleHeight (float)
+	OffJumpImpulse        = 0x68 // JumpImpulse (float) —— 起跳冲量
+	OffJumpSecondHeight   = 0x70 // SecondJumpHeight (float)
+	OffJumpThirdHeight    = 0x74 // ThirdJumpHeight (float)
+)
+
+// SeinDoubleJump 字段偏移（多段跳）。
+const (
+	OffDoubleJumpStrength    = 0x38 // JumpStrength (float)
+	OffDoubleJumpCount       = 0x40 // m_numberOfJumpsAvailable (int) —— 剩余跳跃次数
+	OffDoubleJumpTime        = 0x3C // m_doubleJumpTime (float)
+	OffDoubleJumpRemainLock  = 0x44 // m_remainingLockTime (float)
+)
+
+// PlatformMovement 字段偏移（移动速度）。
+const (
+	OffPlatformLocalSpeed = 0xBC // m_localSpeed (Vector2, float x) —— 当前移动速度
 )
 
 // 一命保护相关常量。

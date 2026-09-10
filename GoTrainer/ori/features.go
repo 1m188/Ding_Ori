@@ -1,5 +1,7 @@
-// Package ori —— 冻结型功能: 激活时捕获当前值，之后每 tick 写回。
-// 功能表两版通用（DE 的字段偏移与原版一致，经堆扫描定位）。
+// Package ori —— 功能实现: 冻结 / 归零 / 倍率 / 计数锁定 四种模式。
+//
+// 键位布局对齐风灵月影《奥日与黑暗森林:终极版》v1.0 Plus 13 修改器。
+// 所有字段偏移经 CE mono dissect 实测（DE v1.0, Assembly-CSharp.dll）。
 package ori
 
 import (
@@ -7,31 +9,60 @@ import (
 	"sync/atomic"
 )
 
-// Feature 一个可开关的冻结功能。
+// Feature 一个可开关的功能。
+// 键位: Digit 1..9/0 配 NeedCtrl 表示 Ctrl+数字键；FuncKey 表示 F 键。
 type Feature struct {
-	Num    int    // 热键数字 1..5
-	Name   string
-	// FixedTarget 非 nil 时表示"固定目标值"模式（如死亡数归零），
-	// 供 UI 显示；语义见 freezeInt。
+	Digit    int  // 1..9 或 0（数字键 0）; -1 表示无数字键位
+	NeedCtrl bool // 是否需按住 Ctrl
+	FuncKey  int  // F 键编号; 0 表示无
+	Name     string
+
+	// FixedTarget 非 nil 表示"固定目标值"模式（UI 显示用）
 	FixedTarget *int32
-	active      atomic.Bool
-	capI        atomic.Int32
-	capF        atomic.Value // float32
-	have        atomic.Bool
-	status      atomic.Value // string
+
+	active atomic.Bool
+	capI   atomic.Int32
+	capF   atomic.Value // float32
+	have   atomic.Bool
+	status atomic.Value // string
 }
 
-// NewFeature 创建功能。
-func NewFeature(num int, name string) *Feature {
-	f := &Feature{Num: num, Name: name}
+// NewFeature 数字键功能。
+func NewFeature(digit int, name string) *Feature {
+	f := &Feature{Digit: digit, Name: name}
 	f.status.Store("未激活")
 	return f
+}
+
+// NewCtrlFeature Ctrl+数字键功能。
+func NewCtrlFeature(digit int, name string) *Feature {
+	f := &Feature{Digit: digit, NeedCtrl: true, Name: name}
+	f.status.Store("未激活")
+	return f
+}
+
+// NewFuncFeature F 键功能。
+func NewFuncFeature(funcKey int, name string) *Feature {
+	f := &Feature{Digit: -1, FuncKey: funcKey, Name: name}
+	f.status.Store("未激活")
+	return f
+}
+
+// HotkeyLabel 键位显示文本。
+func (f *Feature) HotkeyLabel() string {
+	if f.FuncKey > 0 {
+		return fmt.Sprintf("F%d", f.FuncKey)
+	}
+	if f.NeedCtrl {
+		return fmt.Sprintf("Ctrl+数字键 %d", f.Digit)
+	}
+	return fmt.Sprintf("数字键 %d", f.Digit)
 }
 
 // Active 是否激活。
 func (f *Feature) Active() bool { return f.active.Load() }
 
-// SetActive 开关（关闭时清捕获）。
+// SetActive 开关（关闭时清捕获状态）。
 func (f *Feature) SetActive(on bool) {
 	f.active.Store(on)
 	if !on {
@@ -40,37 +71,187 @@ func (f *Feature) SetActive(on bool) {
 	}
 }
 
-// Status 当前状态文本。
+// Status 状态文本。
 func (f *Feature) Status() string { return f.status.Load().(string) }
 
 func (f *Feature) setStatus(s string) { f.status.Store(s) }
 
+// ---------- 执行器 ----------
+
 type ticker interface{ Tick(r *Runtime) }
 
-// OneLifeProtect 一命保护: 把 DifficultyController.Difficulty 锁定为 Normal，
-// 使一命存档的死亡行为与普通模式一致（在上个检查点复活），
-// 同时严格保持 LowestDifficulty == OneLife 以保留"一命通关"成就资格。
-//
-// 依据（DE v1.0 反编译源码，Assembly-CSharp.dll）:
-//   - SeinDamageReciever.OnKill:        if (Difficulty == OneLife) { 标记存档WasKilled + 删光备份 }
-//   - SeinDamageReciever.OnKillRoutine: if (Difficulty == OneLife) 弹 GameOver else 淡出+RestoreCheckpoint
-//   - AchievementsLogic.OnAct3End:      switch (LowestDifficulty) { case OneLife: 授予成就 }
-//   - DifficultyController.ChangeDifficulty: LowestDifficulty = Min(新难度, 原值) —— 只降不升（防作弊）
-//
-// 因此"只改 Difficulty、不动 LowestDifficulty"即可两全:
-// 死亡不会清档/弹 GameOver，而通关时 LowestDifficulty 仍是 OneLife 可拿成就。
-//
-// 实测验证记录（2026-09）:
-//   ✓ 锁定生效: Difficulty 3→1，持续观察 10s+ 游戏未回写
-//   ✓ 不变量保持: LowestDifficulty 始终为 3 (OneLife)
-//   ✓ 纠正能力: 手动写回 OneLife 后，保护在 300ms 内自动纠正为 Normal
-//   ⚠ 未完成的端到端验证（需正常游玩到有伤害区域）:
-//     - 真实死亡后的画面表现（预期：淡出后检查点复活，无 GameOver）
-//     - 存档写盘后重载，确认 .sav 中 LowestDifficulty 仍为 OneLife
-//     建议首次实战使用前，先用新建的一命存档跑一遍死亡流程确认。
-//
-// 副作用说明: 存档槽元数据 (SaveSlotInfo.Difficulty) 会记为 Normal，
-//   因此存档列表可能显示"普通"难度标签；但成就判定读的是 LowestDifficulty，不受影响。
+// reverter 关闭时需要还原原值的执行器。
+type reverter interface{ OnDeactivate(r *Runtime) }
+
+// freezeInt 冻结整型: fixed==nil 时捕获激活瞬间的值并保持；否则恒写 fixed。
+type freezeInt struct {
+	f     *Feature
+	get   func(r *Runtime) (uint32, bool)
+	fixed *int32
+}
+
+func (g *freezeInt) Tick(r *Runtime) {
+	if !g.f.Active() {
+		return
+	}
+	addr, ok := g.get(r)
+	if !ok {
+		g.f.setStatus("地址解析失败")
+		g.f.have.Store(false)
+		return
+	}
+	var v int32
+	if g.fixed != nil {
+		v = *g.fixed
+	} else {
+		if !g.f.have.Load() {
+			cur, ok2 := r.Proc.ReadI32(addr)
+			if !ok2 {
+				g.f.setStatus("读取失败")
+				return
+			}
+			g.f.capI.Store(cur)
+			g.f.have.Store(true)
+		}
+		v = g.f.capI.Load()
+	}
+	if r.Proc.WriteI32(addr, v) {
+		g.f.setStatus(fmt.Sprintf("已锁定 = %d", v))
+	} else {
+		g.f.setStatus("写入失败")
+	}
+}
+
+// freezeFloat 冻结浮点（语义同 freezeInt）。
+type freezeFloat struct {
+	f   *Feature
+	get func(r *Runtime) (uint32, bool)
+}
+
+func (g *freezeFloat) Tick(r *Runtime) {
+	if !g.f.Active() {
+		return
+	}
+	addr, ok := g.get(r)
+	if !ok {
+		g.f.setStatus("地址解析失败")
+		g.f.have.Store(false)
+		return
+	}
+	if !g.f.have.Load() {
+		cur, ok2 := r.Proc.ReadF32(addr)
+		if !ok2 {
+			g.f.setStatus("读取失败")
+			return
+		}
+		g.f.capF.Store(cur)
+		g.f.have.Store(true)
+	}
+	v := g.f.capF.Load().(float32)
+	if r.Proc.WriteF32(addr, v) {
+		g.f.setStatus(fmt.Sprintf("已冻结 = %.2f", v))
+	} else {
+		g.f.setStatus("写入失败")
+	}
+}
+
+// zeroFloat 恒写 0（灵魂链接冷却）。
+type zeroFloat struct {
+	f   *Feature
+	get func(r *Runtime) (uint32, bool)
+}
+
+func (g *zeroFloat) Tick(r *Runtime) {
+	if !g.f.Active() {
+		return
+	}
+	addr, ok := g.get(r)
+	if !ok {
+		g.f.setStatus("地址解析失败")
+		return
+	}
+	if cur, ok2 := r.Proc.ReadF32(addr); ok2 && cur == 0 {
+		g.f.setStatus("冷却已归零 ✓")
+		return
+	}
+	if r.Proc.WriteF32(addr, 0) {
+		g.f.setStatus("冷却已归零 ✓")
+	} else {
+		g.f.setStatus("写入失败")
+	}
+}
+
+// setFloat 倍率放大: 激活时记录原值，持续写入 原值*Multiplier；关闭时还原。
+// 用于超级跳/超级速度这类"放大既有参数"的功能。
+type setFloat struct {
+	f          *Feature
+	get        func(r *Runtime) (uint32, bool)
+	Multiplier float32
+	orig       atomic.Value // float32
+}
+
+func (g *setFloat) Tick(r *Runtime) {
+	if !g.f.Active() {
+		return
+	}
+	addr, ok := g.get(r)
+	if !ok {
+		g.f.setStatus("地址解析失败")
+		return
+	}
+	if !g.f.have.Load() {
+		cur, ok2 := r.Proc.ReadF32(addr)
+		if !ok2 {
+			g.f.setStatus("读取失败")
+			return
+		}
+		g.orig.Store(cur)
+		g.f.have.Store(true)
+	}
+	base := g.orig.Load().(float32)
+	target := base * g.Multiplier
+	if r.Proc.WriteF32(addr, target) {
+		g.f.setStatus(fmt.Sprintf("已放大 %.0fx (%.2f→%.2f)", g.Multiplier, base, target))
+	} else {
+		g.f.setStatus("写入失败")
+	}
+}
+
+func (g *setFloat) OnDeactivate(r *Runtime) {
+	if !g.f.have.Load() {
+		return
+	}
+	if addr, ok := g.get(r); ok {
+		if orig, ok2 := g.orig.Load().(float32); ok2 {
+			r.Proc.WriteF32(addr, orig)
+		}
+	}
+	g.f.have.Store(false)
+}
+
+// setInt 恒写固定整数（无限二段跳等计数器）。
+type setInt struct {
+	f      *Feature
+	get    func(r *Runtime) (uint32, bool)
+	Target int32
+}
+
+func (g *setInt) Tick(r *Runtime) {
+	if !g.f.Active() {
+		return
+	}
+	addr, ok := g.get(r)
+	if !ok {
+		g.f.setStatus("地址解析失败")
+		return
+	}
+	if r.Proc.WriteI32(addr, g.Target) {
+		g.f.setStatus(fmt.Sprintf("已锁定 = %d", g.Target))
+	} else {
+		g.f.setStatus("写入失败")
+	}
+}
+
 type OneLifeProtect struct {
 	active  atomic.Bool
 	locked  atomic.Bool   // 是否已成功锁定
@@ -158,93 +339,108 @@ func (o *OneLifeProtect) ResetForNewProcess() {
 	}
 }
 
-// freezeInt 冻结整型字段。
-// fixed 为 nil 时按"激活瞬间捕获当前值"的方式冻结（风灵月影语义）；
-// 非 nil 时无条件写固定目标值（例如死亡数归零）。
-type freezeInt struct {
-	f     *Feature
-	get   func(r *Runtime) (uint32, bool)
-	fixed *int32
-}
-
-func (g *freezeInt) Tick(r *Runtime) {
-	if !g.f.Active() {
-		return
-	}
-	addr, ok := g.get(r)
-	if !ok {
-		g.f.setStatus("地址解析失败")
-		g.f.have.Store(false)
-		return
-	}
-	var v int32
-	if g.fixed != nil {
-		// 固定目标值模式: 不读取、不捕获，恒写目标值
-		v = *g.fixed
-	} else {
-		if !g.f.have.Load() {
-			if cur, ok := r.Proc.ReadI32(addr); ok {
-				g.f.capI.Store(cur)
-				g.f.have.Store(true)
-			} else {
-				g.f.setStatus("读取失败")
-				return
-			}
-		}
-		v = g.f.capI.Load()
-	}
-	if r.Proc.WriteI32(addr, v) {
-		g.f.setStatus(fmt.Sprintf("已锁定 = %d", v))
-	} else {
-		g.f.setStatus("写入失败")
-	}
-}
-
-// freezeFloat 冻结浮点字段。
-type freezeFloat struct {
-	f   *Feature
-	get func(r *Runtime) (uint32, bool)
-}
-
-func (g *freezeFloat) Tick(r *Runtime) {
-	if !g.f.Active() {
-		return
-	}
-	addr, ok := g.get(r)
-	if !ok {
-		g.f.setStatus("地址解析失败")
-		g.f.have.Store(false)
-		return
-	}
-	if !g.f.have.Load() {
-		if v, ok := r.Proc.ReadF32(addr); ok {
-			g.f.capF.Store(v)
-			g.f.have.Store(true)
-		} else {
-			g.f.setStatus("读取失败")
-			return
-		}
-	}
-	v := g.f.capF.Load().(float32)
-	if r.Proc.WriteF32(addr, v) {
-		g.f.setStatus(fmt.Sprintf("已冻结 = %.2f", v))
-	} else {
-		g.f.setStatus("写入失败")
-	}
-}
+// ---------- 全局状态 ----------
 
 var (
-	allTickers []ticker
-	oneLife    = NewOneLifeProtect() // 一命保护单例（数字键 6）
+	allTickers  []ticker
+	oneLife     = NewOneLifeProtect() // 一命保护（F6）
+	xpBoostMult atomic.Value          // float32 经验倍率，0/未设置=关闭
+	xpBoostBase atomic.Int32          // 倍率生效时的经验基数
 )
 
 // OneLife 返回一命保护实例。
 func OneLife() *OneLifeProtect { return oneLife }
 
-// BuildFeatures 构建功能表（热键 1..5，两版同名同键位）。
+// TickAll 驱动所有激活中的功能。
+func TickAll(r *Runtime) {
+	for _, t := range allTickers {
+		t.Tick(r)
+	}
+	tickXPBoost(r)
+	oneLife.Tick(r)
+}
+
+// DeactivateAll 关闭全部（含需要还原参数的功能）。
+func DeactivateAll(fs []*Feature, r *Runtime) {
+	for _, f := range fs {
+		if !f.Active() {
+			continue
+		}
+		DeactivateFeature(f, r)
+	}
+	oneLife.SetActive(false)
+	xpBoostMult.Store(float32(0))
+	xpBoostBase.Store(0)
+}
+
+// DeactivateFeature 关闭单个功能；若该功能是可还原型（倍率），恢复原值。
+// DeactivateFeature 关闭单个功能。
+// 注意顺序: 必须"先还原原值，再清 have 标志"——OnDeactivate 依赖 have 判断
+// 是否需要还原；若先 SetActive(false) 会清掉 have 导致还原被跳过。
+func DeactivateFeature(f *Feature, r *Runtime) {
+	if !f.Active() {
+		return
+	}
+	for _, t := range allTickers {
+		if sf, ok := t.(*setFloat); ok && sf.f == f {
+			if r != nil {
+				sf.OnDeactivate(r) // 内部会在还原后清 have
+			} else {
+				sf.f.have.Store(false)
+			}
+			f.SetActive(false)
+			return
+		}
+	}
+	f.SetActive(false)
+}
+
+// ---------- 经验倍率（F1..F4）----------
+
+// tickXPBoost 维持 Experience = 基数 × 倍率。
+func tickXPBoost(r *Runtime) {
+	m, _ := xpBoostMult.Load().(float32)
+	if m <= 0 || r.SeinLevel == 0 {
+		return
+	}
+	addr := r.SeinLevel + OffLevelExperience
+	base := xpBoostBase.Load()
+	if base <= 0 {
+		cur, ok := r.Proc.ReadI32(addr)
+		if !ok || cur <= 0 {
+			return
+		}
+		xpBoostBase.Store(cur)
+		base = cur
+	}
+	r.Proc.WriteI32(addr, int32(float32(base)*m))
+}
+
+// SetXPBoost 设置经验倍率（0 = 关闭）。
+func SetXPBoost(mult float32) {
+	xpBoostBase.Store(0) // 重新捕获基数
+	if mult <= 0 {
+		xpBoostMult.Store(float32(0))
+		return
+	}
+	xpBoostMult.Store(mult)
+}
+
+// XPBoostMult 当前经验倍率（UI 显示）。
+func XPBoostMult() float32 {
+	m, _ := xpBoostMult.Load().(float32)
+	return m
+}
+
+// ---------- 功能表 ----------
+
+// BuildFeatures 构建功能表（键位对齐风灵月影 DE v1.0 Plus 13）。
 func BuildFeatures() []*Feature {
 	allTickers = nil
+	xpBoostMult.Store(float32(0))
+	xpBoostBase.Store(0)
 
+	// ---- 字段地址闭包 ----
 	lvlSP := func(r *Runtime) (uint32, bool) {
 		if r.SeinLevel == 0 {
 			return 0, false
@@ -287,46 +483,90 @@ func BuildFeatures() []*Feature {
 		}
 		return r.DeathCounter + OffDeathCounterValue, true
 	}
+	soulCd := func(r *Runtime) (uint32, bool) {
+		if r.SoulFlame == 0 {
+			return 0, false
+		}
+		return r.SoulFlame + OffSoulFlameCooldownRemaining, true
+	}
+	jumpH := func(r *Runtime) (uint32, bool) {
+		if r.SeinJump == 0 {
+			return 0, false
+		}
+		return r.SeinJump + OffJumpFirstHeight, true
+	}
+	jumpImp := func(r *Runtime) (uint32, bool) {
+		if r.SeinJump == 0 {
+			return 0, false
+		}
+		return r.SeinJump + OffJumpImpulse, true
+	}
+	dblCount := func(r *Runtime) (uint32, bool) {
+		if r.DoubleJump == 0 {
+			return 0, false
+		}
+		return r.DoubleJump + OffDoubleJumpCount, true
+	}
+	dblStrength := func(r *Runtime) (uint32, bool) {
+		if r.DoubleJump == 0 {
+			return 0, false
+		}
+		return r.DoubleJump + OffDoubleJumpStrength, true
+	}
 
-	fi := func(num int, name string, get func(*Runtime) (uint32, bool)) *Feature {
-		f := NewFeature(num, name)
-		allTickers = append(allTickers, &freezeInt{f: f, get: get})
+	// ---- 构造器 ----
+	newFrozenFloat := func(digit int, name string, get func(*Runtime) (uint32, bool)) *Feature {
+		f := NewFeature(digit, name)
+		allTickers = append(allTickers, &freezeFloat{f: f, get: get})
 		return f
 	}
-	fiFixed := func(num int, name string, get func(*Runtime) (uint32, bool), target int32) *Feature {
-		f := NewFeature(num, name)
+	newZeroFloat := func(digit int, name string, get func(*Runtime) (uint32, bool)) *Feature {
+		f := NewFeature(digit, name)
+		allTickers = append(allTickers, &zeroFloat{f: f, get: get})
+		return f
+	}
+	newMultiplier := func(digit int, name string, get func(*Runtime) (uint32, bool), mult float32) *Feature {
+		f := NewFeature(digit, name)
+		t := &setFloat{f: f, get: get, Multiplier: mult}
+		allTickers = append(allTickers, t)
+		return f
+	}
+	newCounterLock := func(digit int, name string, get func(*Runtime) (uint32, bool), target int32) *Feature {
+		f := NewFeature(digit, name)
+		t := target
+		f.FixedTarget = &t
+		allTickers = append(allTickers, &setInt{f: f, get: get, Target: t})
+		return f
+	}
+	newCtrlFixed := func(digit int, name string, get func(*Runtime) (uint32, bool), target int32) *Feature {
+		f := NewCtrlFeature(digit, name)
 		t := target
 		f.FixedTarget = &t
 		allTickers = append(allTickers, &freezeInt{f: f, get: get, fixed: &t})
 		return f
 	}
-	ff := func(num int, name string, get func(*Runtime) (uint32, bool)) *Feature {
-		f := NewFeature(num, name)
-		allTickers = append(allTickers, &freezeFloat{f: f, get: get})
+	newFuncFixed := func(funcKey int, name string, get func(*Runtime) (uint32, bool), target int32) *Feature {
+		f := NewFuncFeature(funcKey, name)
+		t := target
+		f.FixedTarget = &t
+		allTickers = append(allTickers, &freezeInt{f: f, get: get, fixed: &t})
 		return f
 	}
 
 	return []*Feature{
-		ff(1, "无限生命", hp),
-		ff(2, "无限能量", en),
-		fi(3, "技能点冻结", lvlSP),
-		fi(4, "经验冻结", lvlEXP),
-		fiFixed(5, "死亡数归零", deaths, 0),
+		// ===== 主功能（数字键 1-0，对齐 FLiNG）=====
+		newFrozenFloat(1, "无限生命", hp),
+		newFrozenFloat(2, "无限能量", en),
+		newZeroFloat(3, "灵魂链接无需冷却", soulCd),
+		// 数字键 4「不安全区域建链接」需代码补丁，暂未实现
+		newMultiplier(5, "超级跳", jumpH, 2.5),
+		newMultiplier(6, "超级跳冲量", jumpImp, 2.0),
+		newCounterLock(7, "无限二段跳", dblCount, 99),
+		newMultiplier(8, "二段跳强化", dblStrength, 2.0),
+		// ===== Ctrl 组合键（对齐 FLiNG）=====
+		newCtrlFixed(1, "无限经验", lvlEXP, 999999),
+		newCtrlFixed(2, "无限能力点数", lvlSP, 999),
+		// ===== 本修改器特色功能（F 键）=====
+		newFuncFixed(5, "死亡数归零", deaths, 0),
 	}
-}
-
-// TickAll 驱动所有激活功能。
-func TickAll(r *Runtime) {
-	for _, t := range allTickers {
-		t.Tick(r)
-	}
-	oneLife.Tick(r)
-}
-
-// DeactivateAll 全部关闭。
-func DeactivateAll(fs []*Feature) {
-	for _, f := range fs {
-		f.SetActive(false)
-	}
-	oneLife.SetActive(false)
 }

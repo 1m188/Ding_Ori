@@ -203,16 +203,18 @@ func renderTrainer(a *app, s *session) {
 		st := f.Status()
 		stCol := cDim
 		switch {
-		case strings.HasPrefix(st, "已冻结"), strings.HasPrefix(st, "已锁定"):
+		case strings.HasPrefix(st, "已冻结"), strings.HasPrefix(st, "已锁定"),
+			strings.HasPrefix(st, "已归零"), strings.HasPrefix(st, "已放大"),
+			strings.HasPrefix(st, "冷却已归零"):
 			stCol = cGreen
 		case st != "未激活":
 			stCol = cRed
 		}
-		b.WriteString(fmt.Sprintf("  %s  %s数字键 %d%s   %s   %s%s%s\n",
-			box, cWhite, f.Num, cReset, f.Name, stCol, st, cReset))
+		b.WriteString(fmt.Sprintf("  %s  %s%-14s%s %s   %s%s%s\n",
+			box, cWhite, f.HotkeyLabel(), cReset, f.Name, stCol, st, cReset))
 	}
 
-	// 一命保护（数字键 6，仅终极版生效）
+	// 一命保护（Ctrl+数字键 3，仅终极版生效）
 	ol := ori.OneLife()
 	box := cWhite + "[ ]" + cReset
 	if ol.Active() {
@@ -226,13 +228,13 @@ func renderTrainer(a *app, s *session) {
 	case st != "未激活":
 		stCol = cRed
 	}
-	b.WriteString(fmt.Sprintf("  %s  %s数字键 6%s   %s   %s%s%s\n",
-		box, cWhite, cReset, ol.Name(), stCol, st, cReset))
+	b.WriteString(fmt.Sprintf("  %s  %s%-14s%s %s   %s%s%s\n",
+		box, cWhite, "Ctrl+数字键 3", cReset, ol.Name(), stCol, st, cReset))
 
 	b.WriteString(cBox + "  ────────────────────────────────────────────────────────\n" + cReset)
-	b.WriteString("  " + cWhite + "数字键 1-6" + cReset + " 开关功能   " + cWhite + "HOME" + cReset + " 关闭全部   " +
-		cWhite + "F12" + cReset + " 重新附加/重扫   " + cWhite + "F1" + cReset + " 帮助   " +
-		cWhite + "ESC" + cReset + " 返回选择   " + cWhite + "END" + cReset + " 退出\n")
+	b.WriteString("  " + cWhite + "数字键 1-0" + cReset + " 功能   " + cWhite + "Ctrl+数字键" + cReset + " 组合功能   " +
+		cWhite + "F5-F11" + cReset + " 特殊功能   " + cWhite + "HOME" + cReset + " 全关   " + cWhite + "F12" + cReset + " 重扫   " +
+		cWhite + "ESC" + cReset + " 返回   " + cWhite + "END" + cReset + " 退出\n")
 	b.WriteString("  " + cDim + a.getMsg() + cReset + "\n")
 
 	writeConsole(b.String())
@@ -345,7 +347,7 @@ func main() {
 			a.help.Store(!a.help.Load())
 		}
 		if keys.pressed(vkEnd) {
-			ori.DeactivateAll(s.feats)
+			ori.DeactivateAll(s.feats, s.r)
 			if s.proc != nil {
 				s.proc.Close()
 			}
@@ -353,7 +355,7 @@ func main() {
 			os.Exit(0)
 		}
 		if keys.pressed(vkEscape) {
-			ori.DeactivateAll(s.feats)
+			ori.DeactivateAll(s.feats, s.r)
 			if s.proc != nil {
 				s.proc.Close()
 			}
@@ -366,7 +368,7 @@ func main() {
 			continue
 		}
 		if keys.pressed(vkHome) {
-			ori.DeactivateAll(s.feats)
+			ori.DeactivateAll(s.feats, s.r)
 			a.setMsg("已关闭全部功能")
 		}
 		if keys.pressed(vkF12) {
@@ -379,33 +381,75 @@ func main() {
 			a.mu.Unlock()
 			a.setMsg("已重置，重新附加中…")
 		}
-		for i := 0; i < 5; i++ {
-			if keys.pressed(0x31 + i) {
-				num := i + 1
+		// 功能热键：数字键 1-9/0（大键盘+小键盘，可配 Ctrl）+ F 键
+		const vkControl = 0x11
+		ctrlDown := core.GetAsyncKeyDown(vkControl)
+		toggle := func(f *ori.Feature) {
+			newState := !f.Active()
+			if newState {
+				f.SetActive(true)
+				if f.FixedTarget != nil {
+					a.setMsg(fmt.Sprintf("已激活: %s — 锁定为 %d", f.Name, *f.FixedTarget))
+				} else {
+					a.setMsg(fmt.Sprintf("已激活: %s", f.Name))
+				}
+			} else {
+				ori.DeactivateFeature(f, s.r)
+				a.setMsg(fmt.Sprintf("已关闭: %s", f.Name))
+			}
+		}
+		// 数字键 1-9（0x31-0x39）与小键盘 1-9（0x61-0x69）
+		for i := 0; i < 9; i++ {
+			if keys.pressed(0x31+i) || keys.pressed(0x61+i) {
+				digit := i + 1
 				for _, f := range s.feats {
-					if f.Num == num {
-						newState := !f.Active()
-						f.SetActive(newState)
-						if newState {
-							if f.FixedTarget != nil {
-								a.setMsg(fmt.Sprintf("已激活: %s — 强制锁定为 %d", f.Name, *f.FixedTarget))
-							} else {
-								a.setMsg(fmt.Sprintf("已激活: %s — 捕获当前值并冻结", f.Name))
-							}
-						} else {
-							a.setMsg(fmt.Sprintf("已关闭: %s", f.Name))
-						}
+					if f.Digit == digit && f.NeedCtrl == ctrlDown {
+						toggle(f)
 					}
 				}
 			}
 		}
-		// 数字键 6: 一命保护（仅终极版有意义）
-		if keys.pressed(0x36) {
+		// 数字键 0（0x30 / 0x60）
+		if keys.pressed(0x30) || keys.pressed(0x60) {
+			for _, f := range s.feats {
+				if f.Digit == 0 && f.NeedCtrl == ctrlDown {
+					toggle(f)
+				}
+			}
+		}
+		// 经验倍率：F1=2x, F2=4x, F3=8x, F4=16x（再按一次关闭）
+		xpMults := []float32{2, 4, 8, 16}
+		for i := 0; i < 4; i++ {
+			if keys.pressed(0x70 + i) { // VK_F1=0x70
+				mult := xpMults[i]
+				if ori.XPBoostMult() == mult {
+					ori.SetXPBoost(0)
+					a.setMsg("已关闭经验倍率")
+				} else {
+					ori.SetXPBoost(mult)
+					a.setMsg(fmt.Sprintf("经验倍率设为 %.0fx", mult))
+				}
+			}
+		}
+
+		// F5..F11（特殊功能；F12 已用于重新附加）
+		for fk := 5; fk <= 11; fk++ {
+			if keys.pressed(0x40 + fk) {
+				for _, f := range s.feats {
+					if f.FuncKey == fk {
+						toggle(f)
+					}
+				}
+			}
+		}
+
+		// 一命保护：Ctrl+数字键 3（仅终极版有意义）
+		if keys.pressed(0x33) && ctrlDown {
 			ol := ori.OneLife()
 			newState := !ol.Active()
 			ol.SetActive(newState)
 			if newState {
-				a.setMsg("已激活: 一命保护 — 死亡将如普通模式一样在检查点复活，成就资格保留")
+				a.setMsg("已激活: 一命保护 — 死亡如普通模式在检查点复活，成就资格保留")
 			} else {
 				a.setMsg("已关闭: 一命保护")
 			}
