@@ -252,6 +252,61 @@ func (g *setInt) Tick(r *Runtime) {
 	}
 }
 
+// soulFlameAnywhere 「不安全区域也可建立灵魂链接」。
+//
+// 源码依据（DE v1.0 反编译，Assembly-CSharp.dll）:
+//
+//	// HandleCharging(): 蓄力只在"安全区域"判定通过时累加
+//	if (m_isCasting && CanAffordSoulFlame && IsSafeToCastSoulFlame == Safe && ...)
+//	    m_holdDownTime += Time.deltaTime / HoldDownDuration;
+//	else
+//	    m_holdDownTime -= ...;                       // 不安全时回退
+//
+//	// UpdateCharacterState(): 施放条件【不含任何安全检查】
+//	if (m_holdDownTime == 1f && m_sein.IsOnGround && m_delayOnGround == 0f)
+//	    CastSoulFlame();
+//
+// 即 IsSafeToCastSoulFlame（7 项判定：禁区/黑暗/存档台/敌人/重生点/无敌/地面射线）
+// 只用于控制蓄力是否累加，真正的施放不检查安全性。
+//
+// 因此本功能的做法: 当玩家按住链接键（m_isCasting=true）且满足施放前置
+// （在地面、无落地延迟）时，直接把蓄力 m_holdDownTime 写满 1.0f ——
+// 游戏下一帧就会执行 CastSoulFlame()，从而在不安全区域成功建立链接。
+// 这是纯数据写入方案，不需要代码补丁，也不修改任何安全判定本身。
+type soulFlameAnywhere struct {
+	f *Feature
+}
+
+func (g *soulFlameAnywhere) Tick(r *Runtime) {
+	if !g.f.Active() {
+		return
+	}
+	sf := r.SubAddr("soulflame")
+	if sf == 0 {
+		g.f.setStatus("等待定位灵魂链接模块…")
+		return
+	}
+	p := r.Proc
+
+	// 前置: 玩家正在按链接键（m_isCasting）
+	castFlag := make([]byte, 1)
+	if !p.ReadBytes(sf+OffSoulFlameCastFlag, castFlag) || castFlag[0] == 0 {
+		g.f.setStatus("待命（按住链接键时生效）")
+		return
+	}
+	// 前置: 在地面且无落地延迟（源码施放条件的一部分）
+	if delay, ok := p.ReadF32(sf + OffSoulFlameDelayOnGround); ok && delay > 0 {
+		g.f.setStatus("落地延迟中…")
+		return
+	}
+	// 核心: 把蓄力写满，跳过安全判定的累加过程
+	if p.WriteF32(sf+OffSoulFlameHoldDown, 1.0) {
+		g.f.setStatus("已强制蓄力 ✓ 可在此区域建链接")
+	} else {
+		g.f.setStatus("写入失败")
+	}
+}
+
 type OneLifeProtect struct {
 	active  atomic.Bool
 	locked  atomic.Bool   // 是否已成功锁定
@@ -553,12 +608,19 @@ func BuildFeatures() []*Feature {
 		return f
 	}
 
+	// 不安全区域也可建立灵魂链接（数字键 4，对齐 FLiNG 键位）
+	newSoulFlameAnywhere := func() *Feature {
+		f := NewFeature(4, "可在不安全区域建立灵魂链接")
+		allTickers = append(allTickers, &soulFlameAnywhere{f: f})
+		return f
+	}
+
 	return []*Feature{
 		// ===== 主功能（数字键 1-0，对齐 FLiNG）=====
 		newFrozenFloat(1, "无限生命", hp),
 		newFrozenFloat(2, "无限能量", en),
 		newZeroFloat(3, "灵魂链接无需冷却", soulCd),
-		// 数字键 4「不安全区域建链接」需代码补丁，暂未实现
+		newSoulFlameAnywhere(),
 		newMultiplier(5, "超级跳", jumpH, 2.5),
 		newMultiplier(6, "超级跳冲量", jumpImp, 2.0),
 		newCounterLock(7, "无限二段跳", dblCount, 99),

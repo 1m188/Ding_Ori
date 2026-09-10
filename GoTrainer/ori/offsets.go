@@ -152,3 +152,13 @@ const (
 	MaxSkillPoints = 99
 	MaxExperience  = 999999
 )
+
+// SeinSoulFlame 施放控制字段（"不安全区域建链接"功能用）。
+// 源码依据（SeinSoulFlame.UpdateCharacterState / HandleCharging / CastSoulFlame）:
+//   - m_holdDownTime 只在"安全区域"判定通过时才累加（HandleCharging）
+//   - 但施放判定 if (m_holdDownTime == 1f && IsOnGround && m_delayOnGround == 0) CastSoulFlame()
+//     不含任何安全检查 —— 因此直接写满蓄力即可绕过全部 7 项安全判定
+const (
+	OffSoulFlameCastFlag      = 0xBC // m_isCasting (bool) —— 玩家按住链接键
+	OffSoulFlameDelayOnGround = 0xC0 // m_delayOnGround (float) —— 落地延迟
+)
