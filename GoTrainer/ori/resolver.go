@@ -329,3 +329,10 @@ func (r *Runtime) SeinCharacterAddr() uint32 {
 	defer r.mu.Unlock()
 	return r.SeinCharacter
 }
+
+// DeathCounterAddr 返回已定位的 SeinDeathCounter 地址（诊断/测试用）。
+func (r *Runtime) DeathCounterAddr() uint32 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.DeathCounter
+}

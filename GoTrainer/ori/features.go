@@ -11,11 +11,14 @@ import (
 type Feature struct {
 	Num    int    // 热键数字 1..5
 	Name   string
-	active atomic.Bool
-	capI   atomic.Int32
-	capF   atomic.Value // float32
-	have   atomic.Bool
-	status atomic.Value // string
+	// FixedTarget 非 nil 时表示"固定目标值"模式（如死亡数归零），
+	// 供 UI 显示；语义见 freezeInt。
+	FixedTarget *int32
+	active      atomic.Bool
+	capI        atomic.Int32
+	capF        atomic.Value // float32
+	have        atomic.Bool
+	status      atomic.Value // string
 }
 
 // NewFeature 创建功能。
@@ -156,9 +159,12 @@ func (o *OneLifeProtect) ResetForNewProcess() {
 }
 
 // freezeInt 冻结整型字段。
+// fixed 为 nil 时按"激活瞬间捕获当前值"的方式冻结（风灵月影语义）；
+// 非 nil 时无条件写固定目标值（例如死亡数归零）。
 type freezeInt struct {
-	f   *Feature
-	get func(r *Runtime) (uint32, bool)
+	f     *Feature
+	get   func(r *Runtime) (uint32, bool)
+	fixed *int32
 }
 
 func (g *freezeInt) Tick(r *Runtime) {
@@ -171,18 +177,24 @@ func (g *freezeInt) Tick(r *Runtime) {
 		g.f.have.Store(false)
 		return
 	}
-	if !g.f.have.Load() {
-		if v, ok := r.Proc.ReadI32(addr); ok {
-			g.f.capI.Store(v)
-			g.f.have.Store(true)
-		} else {
-			g.f.setStatus("读取失败")
-			return
+	var v int32
+	if g.fixed != nil {
+		// 固定目标值模式: 不读取、不捕获，恒写目标值
+		v = *g.fixed
+	} else {
+		if !g.f.have.Load() {
+			if cur, ok := r.Proc.ReadI32(addr); ok {
+				g.f.capI.Store(cur)
+				g.f.have.Store(true)
+			} else {
+				g.f.setStatus("读取失败")
+				return
+			}
 		}
+		v = g.f.capI.Load()
 	}
-	v := g.f.capI.Load()
 	if r.Proc.WriteI32(addr, v) {
-		g.f.setStatus(fmt.Sprintf("已冻结 = %d", v))
+		g.f.setStatus(fmt.Sprintf("已锁定 = %d", v))
 	} else {
 		g.f.setStatus("写入失败")
 	}
@@ -281,6 +293,13 @@ func BuildFeatures() []*Feature {
 		allTickers = append(allTickers, &freezeInt{f: f, get: get})
 		return f
 	}
+	fiFixed := func(num int, name string, get func(*Runtime) (uint32, bool), target int32) *Feature {
+		f := NewFeature(num, name)
+		t := target
+		f.FixedTarget = &t
+		allTickers = append(allTickers, &freezeInt{f: f, get: get, fixed: &t})
+		return f
+	}
 	ff := func(num int, name string, get func(*Runtime) (uint32, bool)) *Feature {
 		f := NewFeature(num, name)
 		allTickers = append(allTickers, &freezeFloat{f: f, get: get})
@@ -292,7 +311,7 @@ func BuildFeatures() []*Feature {
 		ff(2, "无限能量", en),
 		fi(3, "技能点冻结", lvlSP),
 		fi(4, "经验冻结", lvlEXP),
-		fi(5, "死亡数冻结", deaths),
+		fiFixed(5, "死亡数归零", deaths, 0),
 	}
 }
 

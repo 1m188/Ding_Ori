@@ -203,7 +203,7 @@ func renderTrainer(a *app, s *session) {
 		st := f.Status()
 		stCol := cDim
 		switch {
-		case strings.HasPrefix(st, "已冻结"):
+		case strings.HasPrefix(st, "已冻结"), strings.HasPrefix(st, "已锁定"):
 			stCol = cGreen
 		case st != "未激活":
 			stCol = cRed
@@ -387,7 +387,11 @@ func main() {
 						newState := !f.Active()
 						f.SetActive(newState)
 						if newState {
-							a.setMsg(fmt.Sprintf("已激活: %s — 捕获当前值并冻结", f.Name))
+							if f.FixedTarget != nil {
+								a.setMsg(fmt.Sprintf("已激活: %s — 强制锁定为 %d", f.Name, *f.FixedTarget))
+							} else {
+								a.setMsg(fmt.Sprintf("已激活: %s — 捕获当前值并冻结", f.Name))
+							}
 						} else {
 							a.setMsg(fmt.Sprintf("已关闭: %s", f.Name))
 						}
