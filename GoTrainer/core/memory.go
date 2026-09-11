@@ -3,6 +3,8 @@ package core
 
 import (
 	"fmt"
+	"os"
+	"strings"
 	"syscall"
 	"unsafe"
 )
@@ -224,4 +226,92 @@ func (p *Process) ReadableRegions() []Region {
 func GetAsyncKeyDown(vk int) bool {
 	r, _, _ := procGetAsyncKeyState.Call(uintptr(vk))
 	return r&0x8000 != 0
+}
+
+// ---------- 窗口前台检测 ----------
+
+var (
+	procGetForegroundWindow = moduser32.NewProc("GetForegroundWindow")
+	procGetConsoleWindow    = modkernel32.NewProc("GetConsoleWindow")
+	procGetWindowThreadProc = moduser32.NewProc("GetWindowThreadProcessId")
+	procGetWindowTextW      = moduser32.NewProc("GetWindowTextW")
+	procGetWindowTextLen    = moduser32.NewProc("GetWindowTextLengthW")
+)
+
+// WindowIsForeground 判断当前控制台/终端窗口是否处于前台。
+//
+// 判定策略（按可靠性排序，任一命中即视为前台）:
+//  1. GetConsoleWindow() == 前台窗口（传统 conhost 场景）
+//  2. 前台窗口的 PID 沿本进程父链可达（进程健康时的常规场景）
+//  3. 前台窗口标题含 "OriTrainer"（Windows Terminal 等宿主场景兜底：
+//     GoTrainer 启动后会把宿主窗口标题设置为 "OriTrainer — ..."）
+func WindowIsForeground() bool {
+	fg, _, _ := procGetForegroundWindow.Call()
+	if fg == 0 {
+		return false
+	}
+	cw, _, _ := procGetConsoleWindow.Call()
+	if cw != 0 && fg == cw {
+		return true
+	}
+
+	// 策略 2: PID 父链
+	var fgPid uint32
+	procGetWindowThreadProc.Call(fg, uintptr(unsafe.Pointer(&fgPid)), 0, 0)
+	if fgPid != 0 {
+		me := uint32(os.Getpid())
+		if fgPid == me {
+			return true
+		}
+		cur := me
+		for i := 0; i < 8; i++ {
+			parent := processParentPid(cur)
+			if parent == 0 || parent == cur {
+				break
+			}
+			if parent == fgPid {
+				return true
+			}
+			cur = parent
+		}
+	}
+
+	// 策略 3: 窗口标题兜底（覆盖 Windows Terminal 宿主场景）
+	return windowTitleContains(fg, "OriTrainer")
+}
+
+// windowTitleContains 判断窗口标题是否包含指定子串（大小写敏感，UTF-16）。
+func windowTitleContains(hwnd uintptr, sub string) bool {
+	length, _, _ := procGetWindowTextLen.Call(hwnd)
+	if length == 0 {
+		return false
+	}
+	buf := make([]uint16, length+1)
+	procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	title := syscall.UTF16ToString(buf)
+	return strings.Contains(title, sub)
+}
+
+// processParentPid 返回指定进程的父进程 PID（取不到返回 0）。
+func processParentPid(pid uint32) uint32 {
+	snapshot, err := syscall.CreateToolhelp32Snapshot(syscall.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return 0
+	}
+	defer syscall.CloseHandle(snapshot)
+
+	var entry syscall.ProcessEntry32
+	entry.Size = uint32(unsafe.Sizeof(entry))
+	if err := syscall.Process32First(snapshot, &entry); err != nil {
+		return 0
+	}
+	for {
+		if entry.ProcessID == pid {
+			return entry.ParentProcessID
+		}
+		if err := syscall.Process32Next(snapshot, &entry); err != nil {
+			break
+		}
+	}
+	return 0
 }

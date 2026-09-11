@@ -6,15 +6,21 @@ package ori
 
 import (
 	"fmt"
+	"strings"
 	"sync/atomic"
 )
 
 // Feature 一个可开关的功能。
-// 键位: Digit 1..9/0 配 NeedCtrl 表示 Ctrl+数字键；FuncKey 表示 F 键。
+//
+// 键位约定（只用小键盘，避免与笔记本键盘的 F 键/主键盘区冲突）:
+//   - NeedCtrl=false: 小键盘数字键 Digit（1..9, 0）
+//   - NeedCtrl=true : Ctrl + 小键盘数字键 Digit
+//
+// 另支持"前台导航"：修改器窗口在前台时，用 ↑↓ 选择、回车/空格切换
+// （见 UI 层的 navCursor），供没有小键盘的键盘使用。
 type Feature struct {
-	Digit    int  // 1..9 或 0（数字键 0）; -1 表示无数字键位
+	Digit    int  // 1..9 或 0（小键盘数字键 0）
 	NeedCtrl bool // 是否需按住 Ctrl
-	FuncKey  int  // F 键编号; 0 表示无
 	Name     string
 
 	// FixedTarget 非 nil 表示"固定目标值"模式（UI 显示用）
@@ -27,36 +33,26 @@ type Feature struct {
 	status atomic.Value // string
 }
 
-// NewFeature 数字键功能。
+// NewFeature 小键盘数字键功能。
 func NewFeature(digit int, name string) *Feature {
 	f := &Feature{Digit: digit, Name: name}
 	f.status.Store("未激活")
 	return f
 }
 
-// NewCtrlFeature Ctrl+数字键功能。
+// NewCtrlFeature Ctrl + 小键盘数字键功能。
 func NewCtrlFeature(digit int, name string) *Feature {
 	f := &Feature{Digit: digit, NeedCtrl: true, Name: name}
 	f.status.Store("未激活")
 	return f
 }
 
-// NewFuncFeature F 键功能。
-func NewFuncFeature(funcKey int, name string) *Feature {
-	f := &Feature{Digit: -1, FuncKey: funcKey, Name: name}
-	f.status.Store("未激活")
-	return f
-}
-
 // HotkeyLabel 键位显示文本。
 func (f *Feature) HotkeyLabel() string {
-	if f.FuncKey > 0 {
-		return fmt.Sprintf("F%d", f.FuncKey)
-	}
 	if f.NeedCtrl {
-		return fmt.Sprintf("Ctrl+数字键 %d", f.Digit)
+		return fmt.Sprintf("Ctrl+小键盘 %d", f.Digit)
 	}
-	return fmt.Sprintf("数字键 %d", f.Digit)
+	return fmt.Sprintf("小键盘 %d", f.Digit)
 }
 
 // Active 是否激活。
@@ -398,13 +394,47 @@ func (o *OneLifeProtect) ResetForNewProcess() {
 
 var (
 	allTickers  []ticker
-	oneLife     = NewOneLifeProtect() // 一命保护（F6）
+	oneLife     = NewOneLifeProtect() // 一命保护（Ctrl+小键盘 3）
 	xpBoostMult atomic.Value          // float32 经验倍率，0/未设置=关闭
 	xpBoostBase atomic.Int32          // 倍率生效时的经验基数
+
+	// featureActivators 记录需要自定义激活/关闭副作用的执行器
+	// （如经验倍率的单选逻辑），由 UI 层通过 ActivateFeature/DeactivateFeature 调用。
+	featureActivators = map[*Feature]func(on bool){}
 )
 
 // OneLife 返回一命保护实例。
 func OneLife() *OneLifeProtect { return oneLife }
+
+// ActivateFeature 激活功能（先设置状态，再执行器特定的激活副作用）。
+func ActivateFeature(f *Feature) {
+	f.SetActive(true)
+	if act, ok := featureActivators[f]; ok {
+		act(true)
+	}
+}
+
+// DeactivateFeature 关闭功能。
+// 顺序要求: 先还原原值（倍率型），再清状态，最后回滚激活副作用。
+func DeactivateFeature(f *Feature, r *Runtime) {
+	if !f.Active() {
+		return
+	}
+	for _, t := range allTickers {
+		if sf, ok := t.(*setFloat); ok && sf.f == f {
+			if r != nil {
+				sf.OnDeactivate(r) // 内部会在还原后清 have
+			} else {
+				sf.f.have.Store(false)
+			}
+			break
+		}
+	}
+	f.SetActive(false)
+	if act, ok := featureActivators[f]; ok {
+		act(false)
+	}
+}
 
 // TickAll 驱动所有激活中的功能。
 func TickAll(r *Runtime) {
@@ -428,29 +458,16 @@ func DeactivateAll(fs []*Feature, r *Runtime) {
 	xpBoostBase.Store(0)
 }
 
-// DeactivateFeature 关闭单个功能；若该功能是可还原型（倍率），恢复原值。
-// DeactivateFeature 关闭单个功能。
-// 注意顺序: 必须"先还原原值，再清 have 标志"——OnDeactivate 依赖 have 判断
-// 是否需要还原；若先 SetActive(false) 会清掉 have 导致还原被跳过。
-func DeactivateFeature(f *Feature, r *Runtime) {
-	if !f.Active() {
-		return
-	}
-	for _, t := range allTickers {
-		if sf, ok := t.(*setFloat); ok && sf.f == f {
-			if r != nil {
-				sf.OnDeactivate(r) // 内部会在还原后清 have
-			} else {
-				sf.f.have.Store(false)
-			}
-			f.SetActive(false)
-			return
-		}
-	}
-	f.SetActive(false)
+// ---------- 经验倍率（Ctrl+小键盘 5/6/7/8）----------
+
+// xpBoostOption 经验倍率选项（单选语义: 激活一个会自动关闭其它倍率）。
+type xpBoostOption struct {
+	f    *Feature
+	mult float32
 }
 
-// ---------- 经验倍率（F1..F4）----------
+// Tick 空实现: 倍率的实际写入由 tickXPBoost 统一处理。
+func (g *xpBoostOption) Tick(r *Runtime) {}
 
 // tickXPBoost 维持 Experience = 基数 × 倍率。
 func tickXPBoost(r *Runtime) {
@@ -600,23 +617,42 @@ func BuildFeatures() []*Feature {
 		allTickers = append(allTickers, &freezeInt{f: f, get: get, fixed: &t})
 		return f
 	}
-	newFuncFixed := func(funcKey int, name string, get func(*Runtime) (uint32, bool), target int32) *Feature {
-		f := NewFuncFeature(funcKey, name)
-		t := target
-		f.FixedTarget = &t
-		allTickers = append(allTickers, &freezeInt{f: f, get: get, fixed: &t})
-		return f
-	}
-
-	// 不安全区域也可建立灵魂链接（数字键 4，对齐 FLiNG 键位）
+	// 不安全区域也可建立灵魂链接（小键盘 4，对齐 FLiNG 键位）
 	newSoulFlameAnywhere := func() *Feature {
 		f := NewFeature(4, "可在不安全区域建立灵魂链接")
 		allTickers = append(allTickers, &soulFlameAnywhere{f: f})
 		return f
 	}
+	newCtrlCounterLock := func(digit int, name string, get func(*Runtime) (uint32, bool), target int32) *Feature {
+		f := NewCtrlFeature(digit, name)
+		t := target
+		f.FixedTarget = &t
+		allTickers = append(allTickers, &freezeInt{f: f, get: get, fixed: &t})
+		return f
+	}
+	// 经验倍率选项（单选语义: 同时只有一个倍率生效）
+	newXPBoost := func(digit int, mult float32) *Feature {
+		f := NewCtrlFeature(digit, fmt.Sprintf("经验倍率 %.0fx", mult))
+		allTickers = append(allTickers, &xpBoostOption{f: f, mult: mult})
+		// 单选语义: 激活某倍率时关闭其它倍率，并设置全局倍率值
+		featureActivators[f] = func(on bool) {
+			if on {
+				for other, act := range featureActivators {
+					if other != f && other.Active() && strings.HasPrefix(other.Name, "经验倍率") {
+						act(false) // 关闭其它倍率（会调用 SetXPBoost(0)）
+						other.SetActive(false)
+					}
+				}
+				SetXPBoost(mult)
+			} else {
+				SetXPBoost(0)
+			}
+		}
+		return f
+	}
 
 	return []*Feature{
-		// ===== 主功能（数字键 1-0，对齐 FLiNG）=====
+		// ===== 主功能：小键盘 1-8 =====
 		newFrozenFloat(1, "无限生命", hp),
 		newFrozenFloat(2, "无限能量", en),
 		newZeroFloat(3, "灵魂链接无需冷却", soulCd),
@@ -625,10 +661,14 @@ func BuildFeatures() []*Feature {
 		newMultiplier(6, "超级跳冲量", jumpImp, 2.0),
 		newCounterLock(7, "无限二段跳", dblCount, 99),
 		newMultiplier(8, "二段跳强化", dblStrength, 2.0),
-		// ===== Ctrl 组合键（对齐 FLiNG）=====
+		// ===== Ctrl + 小键盘 =====
 		newCtrlFixed(1, "无限经验", lvlEXP, 999999),
 		newCtrlFixed(2, "无限能力点数", lvlSP, 999),
-		// ===== 本修改器特色功能（F 键）=====
-		newFuncFixed(5, "死亡数归零", deaths, 0),
+		// 一命保护占 Ctrl+小键盘 3（见 oneLife，在 UI 层作为导航项呈现）
+		newCtrlCounterLock(4, "死亡数归零", deaths, 0),
+		newXPBoost(5, 2),
+		newXPBoost(6, 4),
+		newXPBoost(7, 8),
+		newXPBoost(8, 16),
 	}
 }

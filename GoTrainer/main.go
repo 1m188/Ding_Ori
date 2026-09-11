@@ -97,10 +97,56 @@ type session struct {
 type app struct {
 	mu        sync.Mutex
 	sess      *session
-	selCursor int
+	selCursor int // 版本选择光标
+	navCursor int // 修改器界面：当前选中的功能项（前台导航用）
 	chosen    bool
 	msg       atomic.Value
 	help      atomic.Bool
+}
+
+// navItems 修改器界面的可选项目总数（功能数 + 1 个"一命保护"）。
+func navItems(s *session) int {
+	if s == nil {
+		return 0
+	}
+	return len(s.feats) + 1
+}
+
+// navToggleAt 切换第 idx 个导航项（idx == len(feats) 时是一命保护）。
+func (a *app) navToggleAt(s *session, idx int) {
+	if s == nil {
+		return
+	}
+	if idx < 0 || idx >= navItems(s) {
+		return
+	}
+	if idx == len(s.feats) {
+		ol := ori.OneLife()
+		on := !ol.Active()
+		ol.SetActive(on)
+		if on {
+			a.setMsg("已激活: 一命保护 — 死亡如普通模式在检查点复活，成就资格保留")
+		} else {
+			a.setMsg("已关闭: 一命保护")
+		}
+		return
+	}
+	toggleFeature(a, s, s.feats[idx])
+}
+
+// toggleFeature 切换单个功能（含可还原型的状态回滚）。
+func toggleFeature(a *app, s *session, f *ori.Feature) {
+	if f.Active() {
+		ori.DeactivateFeature(f, s.r)
+		a.setMsg(fmt.Sprintf("已关闭: %s", f.Name))
+		return
+	}
+	ori.ActivateFeature(f)
+	if f.FixedTarget != nil {
+		a.setMsg(fmt.Sprintf("已激活: %s — 锁定为 %d", f.Name, *f.FixedTarget))
+	} else {
+		a.setMsg(fmt.Sprintf("已激活: %s", f.Name))
+	}
 }
 
 func (a *app) setMsg(s string) { a.msg.Store(s) }
@@ -195,49 +241,66 @@ func renderTrainer(a *app, s *session) {
 		b.WriteString(cYel + "  [帮助] 冻结=激活时捕获当前值并持续写回; 进入存档后生效; 全局热键免切窗\n" + cReset)
 	}
 
-	for _, f := range s.feats {
+	// 前台导航: 窗口在前台时显示光标
+	fg := core.WindowIsForeground()
+
+	// 统一渲染: 功能项 + 一命保护（后者固定在末尾）
+	renderRow := func(idx int, box, label, name, status string, statusActive bool) {
+		cursor := "  "
+		if fg && a.navCursor == idx {
+			cursor = cCyan + "▶" + cReset + " "
+		} else {
+			cursor = "  "
+		}
+		// 热键标签固定宽度（Ctrl+小键盘 N = 12 个显示字符）
+		b.WriteString(fmt.Sprintf("  %s%s  %s%-12s%s %s   %s%s%s\n",
+			cursor, box, cWhite, label, cReset, name, statusColor(status, statusActive), status, cReset))
+	}
+
+	for i, f := range s.feats {
 		box := cWhite + "[ ]" + cReset
 		if f.Active() {
 			box = cGreen + "[x]" + cReset
 		}
-		st := f.Status()
-		stCol := cDim
-		switch {
-		case strings.HasPrefix(st, "已冻结"), strings.HasPrefix(st, "已锁定"),
-			strings.HasPrefix(st, "已归零"), strings.HasPrefix(st, "已放大"),
-			strings.HasPrefix(st, "冷却已归零"):
-			stCol = cGreen
-		case st != "未激活":
-			stCol = cRed
-		}
-		b.WriteString(fmt.Sprintf("  %s  %s%-14s%s %s   %s%s%s\n",
-			box, cWhite, f.HotkeyLabel(), cReset, f.Name, stCol, st, cReset))
+		renderRow(i, box, f.HotkeyLabel(), f.Name, f.Status(), f.Active())
 	}
 
-	// 一命保护（Ctrl+数字键 3，仅终极版生效）
+	// 一命保护（Ctrl+小键盘 3，仅终极版生效）
 	ol := ori.OneLife()
-	box := cWhite + "[ ]" + cReset
+	olBox := cWhite + "[ ]" + cReset
 	if ol.Active() {
-		box = cGreen + "[x]" + cReset
+		olBox = cGreen + "[x]" + cReset
 	}
-	st := ol.Status()
-	stCol := cDim
-	switch {
-	case strings.HasPrefix(st, "已锁定"), strings.HasPrefix(st, "保护中"):
-		stCol = cGreen
-	case st != "未激活":
-		stCol = cRed
-	}
-	b.WriteString(fmt.Sprintf("  %s  %s%-14s%s %s   %s%s%s\n",
-		box, cWhite, "Ctrl+数字键 3", cReset, ol.Name(), stCol, st, cReset))
+	renderRow(len(s.feats), olBox, "Ctrl+小键盘 3", ol.Name(), ol.Status(), ol.Active())
 
 	b.WriteString(cBox + "  ────────────────────────────────────────────────────────\n" + cReset)
-	b.WriteString("  " + cWhite + "数字键 1-0" + cReset + " 功能   " + cWhite + "Ctrl+数字键" + cReset + " 组合功能   " +
-		cWhite + "F5-F11" + cReset + " 特殊功能   " + cWhite + "HOME" + cReset + " 全关   " + cWhite + "F12" + cReset + " 重扫   " +
-		cWhite + "ESC" + cReset + " 返回   " + cWhite + "END" + cReset + " 退出\n")
+	if fg {
+		b.WriteString("  " + cCyan + "前台模式" + cReset + ": " + cWhite + "↑↓" + cReset + " 选择   " +
+			cWhite + "回车/空格" + cReset + " 开关   |   " +
+			cWhite + "小键盘 1-8" + cReset + " 功能   " + cWhite + "Ctrl+小键盘" + cReset + " 组合功能\n")
+	} else {
+		b.WriteString("  " + cDim + "全局热键: 小键盘 1-8 功能 / Ctrl+小键盘 组合功能（切到本窗口可用 ↑↓ 导航）" + cReset + "\n")
+	}
+	b.WriteString("  " + cWhite + "HOME" + cReset + " 全关   " + cWhite + "F12" + cReset + " 重扫   " +
+		cWhite + "F1" + cReset + " 帮助   " + cWhite + "ESC" + cReset + " 返回   " + cWhite + "END" + cReset + " 退出\n")
 	b.WriteString("  " + cDim + a.getMsg() + cReset + "\n")
 
 	writeConsole(b.String())
+}
+
+// statusColor 根据状态文本返回配色。
+func statusColor(status string, active bool) string {
+	switch {
+	case strings.HasPrefix(status, "已冻结"), strings.HasPrefix(status, "已锁定"),
+		strings.HasPrefix(status, "已归零"), strings.HasPrefix(status, "已放大"),
+		strings.HasPrefix(status, "冷却已归零"), strings.HasPrefix(status, "已强制蓄力"),
+		strings.HasPrefix(status, "保护中"):
+		return cGreen
+	case status == "未激活":
+		return cDim
+	default:
+		return cRed
+	}
 }
 
 // ---------- 会话协程 ----------
@@ -304,6 +367,7 @@ func main() {
 		vkUp     = 0x26
 		vkDown   = 0x28
 		vkReturn = 0x0D
+		vkSpace  = 0x20
 		vkEscape = 0x1B
 		vkW      = 0x57
 		vkS      = 0x53
@@ -381,70 +445,30 @@ func main() {
 			a.mu.Unlock()
 			a.setMsg("已重置，重新附加中…")
 		}
-		// 功能热键：数字键 1-9/0（大键盘+小键盘，可配 Ctrl）+ F 键
+		// ---- 全局热键：仅小键盘数字键（可配 Ctrl）----
 		const vkControl = 0x11
 		ctrlDown := core.GetAsyncKeyDown(vkControl)
-		toggle := func(f *ori.Feature) {
-			newState := !f.Active()
-			if newState {
-				f.SetActive(true)
-				if f.FixedTarget != nil {
-					a.setMsg(fmt.Sprintf("已激活: %s — 锁定为 %d", f.Name, *f.FixedTarget))
-				} else {
-					a.setMsg(fmt.Sprintf("已激活: %s", f.Name))
-				}
-			} else {
-				ori.DeactivateFeature(f, s.r)
-				a.setMsg(fmt.Sprintf("已关闭: %s", f.Name))
-			}
-		}
-		// 数字键 1-9（0x31-0x39）与小键盘 1-9（0x61-0x69）
+
+		// 小键盘 1-9 是 0x61-0x69，小键盘 0 是 0x60
 		for i := 0; i < 9; i++ {
-			if keys.pressed(0x31+i) || keys.pressed(0x61+i) {
+			if keys.pressed(0x61 + i) {
 				digit := i + 1
 				for _, f := range s.feats {
 					if f.Digit == digit && f.NeedCtrl == ctrlDown {
-						toggle(f)
+						toggleFeature(a, s, f)
 					}
 				}
 			}
 		}
-		// 数字键 0（0x30 / 0x60）
-		if keys.pressed(0x30) || keys.pressed(0x60) {
+		if keys.pressed(0x60) {
 			for _, f := range s.feats {
 				if f.Digit == 0 && f.NeedCtrl == ctrlDown {
-					toggle(f)
+					toggleFeature(a, s, f)
 				}
 			}
 		}
-		// 经验倍率：F1=2x, F2=4x, F3=8x, F4=16x（再按一次关闭）
-		xpMults := []float32{2, 4, 8, 16}
-		for i := 0; i < 4; i++ {
-			if keys.pressed(0x70 + i) { // VK_F1=0x70
-				mult := xpMults[i]
-				if ori.XPBoostMult() == mult {
-					ori.SetXPBoost(0)
-					a.setMsg("已关闭经验倍率")
-				} else {
-					ori.SetXPBoost(mult)
-					a.setMsg(fmt.Sprintf("经验倍率设为 %.0fx", mult))
-				}
-			}
-		}
-
-		// F5..F11（特殊功能；F12 已用于重新附加）
-		for fk := 5; fk <= 11; fk++ {
-			if keys.pressed(0x40 + fk) {
-				for _, f := range s.feats {
-					if f.FuncKey == fk {
-						toggle(f)
-					}
-				}
-			}
-		}
-
-		// 一命保护：Ctrl+数字键 3（仅终极版有意义）
-		if keys.pressed(0x33) && ctrlDown {
+		// 一命保护：Ctrl + 小键盘 3（仅终极版有意义）
+		if keys.pressed(0x63) && ctrlDown {
 			ol := ori.OneLife()
 			newState := !ol.Active()
 			ol.SetActive(newState)
@@ -452,6 +476,26 @@ func main() {
 				a.setMsg("已激活: 一命保护 — 死亡如普通模式在检查点复活，成就资格保留")
 			} else {
 				a.setMsg("已关闭: 一命保护")
+			}
+		}
+
+		// ---- 前台导航：修改器窗口在前台时，用 ↑↓ 选择 + 回车/空格切换 ----
+		// 供没有小键盘的键盘使用（全局热键仍可用）。
+		if core.WindowIsForeground() {
+			if keys.pressed(vkUp) || keys.pressed(vkW) {
+				n := navItems(s)
+				if n > 0 {
+					a.navCursor = (a.navCursor - 1 + n) % n
+				}
+			}
+			if keys.pressed(vkDown) || keys.pressed(vkS) {
+				n := navItems(s)
+				if n > 0 {
+					a.navCursor = (a.navCursor + 1) % n
+				}
+			}
+			if keys.pressed(vkReturn) || keys.pressed(vkSpace) {
+				a.navToggleAt(s, a.navCursor)
 			}
 		}
 
