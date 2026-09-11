@@ -610,13 +610,6 @@ func BuildFeatures() []*Feature {
 		allTickers = append(allTickers, &setInt{f: f, get: get, Target: t})
 		return f
 	}
-	newCtrlFixed := func(digit int, name string, get func(*Runtime) (uint32, bool), target int32) *Feature {
-		f := NewCtrlFeature(digit, name)
-		t := target
-		f.FixedTarget = &t
-		allTickers = append(allTickers, &freezeInt{f: f, get: get, fixed: &t})
-		return f
-	}
 	// 不安全区域也可建立灵魂链接（小键盘 4，对齐 FLiNG 键位）
 	newSoulFlameAnywhere := func() *Feature {
 		f := NewFeature(4, "可在不安全区域建立灵魂链接")
@@ -651,24 +644,36 @@ func BuildFeatures() []*Feature {
 		return f
 	}
 
+	// 键位分配原则: 每个功能只有一个快捷键；优先填满小键盘 1-9/0（10 个），
+	// 溢出部分再用 Ctrl+小键盘。一命保护占用 Ctrl+小键盘 1（见 oneLife 单例）。
+	newFixedInt := func(digit int, name string, get func(*Runtime) (uint32, bool), target int32) *Feature {
+		f := NewFeature(digit, name)
+		t := target
+		f.FixedTarget = &t
+		allTickers = append(allTickers, &freezeInt{f: f, get: get, fixed: &t})
+		return f
+	}
+
 	return []*Feature{
-		// ===== 主功能：小键盘 1-8 =====
+		// ===== 小键盘 1-9/0（前 10 项）=====
 		newFrozenFloat(1, "无限生命", hp),
 		newFrozenFloat(2, "无限能量", en),
 		newZeroFloat(3, "灵魂链接无需冷却", soulCd),
-		newSoulFlameAnywhere(),
+		newSoulFlameAnywhere(), // 小键盘 4
 		newMultiplier(5, "超级跳", jumpH, 2.5),
 		newMultiplier(6, "超级跳冲量", jumpImp, 2.0),
 		newCounterLock(7, "无限二段跳", dblCount, 99),
 		newMultiplier(8, "二段跳强化", dblStrength, 2.0),
-		// ===== Ctrl + 小键盘 =====
-		newCtrlFixed(1, "无限经验", lvlEXP, 999999),
-		newCtrlFixed(2, "无限能力点数", lvlSP, 999),
-		// 一命保护占 Ctrl+小键盘 3（见 oneLife，在 UI 层作为导航项呈现）
-		newCtrlCounterLock(4, "死亡数归零", deaths, 0),
-		newXPBoost(5, 2),
-		newXPBoost(6, 4),
-		newXPBoost(7, 8),
-		newXPBoost(8, 16),
+		newFixedInt(9, "无限经验", lvlEXP, 999999),
+		newFixedInt(0, "无限能力点数", lvlSP, 999),
+		// ===== Ctrl+小键盘（第 11 项起；Ctrl+1 为一命保护，见 oneLife）=====
+		newCtrlCounterLock(2, "死亡数归零", deaths, 0),
+		newXPBoost(3, 2),
+		newXPBoost(4, 4),
+		newXPBoost(5, 8),
+		newXPBoost(6, 16),
 	}
 }
+
+// CtrlOneLifeDigit 一命保护的键位（Ctrl+小键盘 1）。
+const CtrlOneLifeDigit = 1

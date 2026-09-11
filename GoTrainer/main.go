@@ -104,34 +104,78 @@ type app struct {
 	help      atomic.Bool
 }
 
-// navItems 修改器界面的可选项目总数（功能数 + 1 个"一命保护"）。
-func navItems(s *session) int {
-	if s == nil {
-		return 0
-	}
-	return len(s.feats) + 1
+// navEntry 一个导航项（功能项或一命保护）。
+type navEntry struct {
+	feat   *ori.Feature // nil 表示一命保护
+	label  string
+	name   string
+	active bool
+	status string
 }
 
-// navToggleAt 切换第 idx 个导航项（idx == len(feats) 时是一命保护）。
-func (a *app) navToggleAt(s *session, idx int) {
+// navList 按显示顺序构建导航项：
+// 小键盘 1-9/0 各功能 → 一命保护（Ctrl+小键盘 1）→ 其余 Ctrl+小键盘 功能。
+func navList(s *session) []navEntry {
 	if s == nil {
-		return
+		return nil
 	}
-	if idx < 0 || idx >= navItems(s) {
-		return
+	ol := ori.OneLife()
+	olEntry := navEntry{
+		label:  fmt.Sprintf("Ctrl+小键盘 %d", ori.CtrlOneLifeDigit),
+		name:   ol.Name(),
+		active: ol.Active(),
+		status: ol.Status(),
 	}
-	if idx == len(s.feats) {
-		ol := ori.OneLife()
-		on := !ol.Active()
-		ol.SetActive(on)
-		if on {
-			a.setMsg("已激活: 一命保护 — 死亡如普通模式在检查点复活，成就资格保留")
-		} else {
-			a.setMsg("已关闭: 一命保护")
+	var out []navEntry
+	for _, f := range s.feats {
+		// 一命保护插在第一个 Ctrl 项之前（即小键盘组之后）
+		if f.NeedCtrl && olEntry.feat == nil && !hasOneLife(out) {
+			out = append(out, olEntry)
 		}
+		out = append(out, navEntry{
+			feat: f, label: f.HotkeyLabel(), name: f.Name,
+			active: f.Active(), status: f.Status(),
+		})
+	}
+	if !hasOneLife(out) {
+		out = append(out, olEntry)
+	}
+	return out
+}
+
+func hasOneLife(list []navEntry) bool {
+	for _, e := range list {
+		if e.feat == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// navToggle 切换第 idx 个导航项。
+func (a *app) navToggle(s *session, idx int) {
+	list := navList(s)
+	if idx < 0 || idx >= len(list) {
 		return
 	}
-	toggleFeature(a, s, s.feats[idx])
+	e := list[idx]
+	if e.feat == nil {
+		toggleOneLife(a)
+		return
+	}
+	toggleFeature(a, s, e.feat)
+}
+
+// toggleOneLife 切换一命保护。
+func toggleOneLife(a *app) {
+	ol := ori.OneLife()
+	on := !ol.Active()
+	ol.SetActive(on)
+	if on {
+		a.setMsg("已激活: 一命保护 — 死亡如普通模式在检查点复活，成就资格保留")
+	} else {
+		a.setMsg("已关闭: 一命保护")
+	}
 }
 
 // toggleFeature 切换单个功能（含可还原型的状态回滚）。
@@ -244,42 +288,33 @@ func renderTrainer(a *app, s *session) {
 	// 前台导航: 窗口在前台时显示光标
 	fg := core.WindowIsForeground()
 
-	// 统一渲染: 功能项 + 一命保护（后者固定在末尾）
-	renderRow := func(idx int, box, label, name, status string, statusActive bool) {
+	// 统一渲染导航项（小键盘组 → 一命保护 → 其余 Ctrl 组）
+	rows := navList(s)
+	for i, e := range rows {
 		cursor := "  "
-		if fg && a.navCursor == idx {
+		if fg && a.navCursor == i {
 			cursor = cCyan + "▶" + cReset + " "
-		} else {
-			cursor = "  "
 		}
-		// 热键标签固定宽度（Ctrl+小键盘 N = 12 个显示字符）
-		b.WriteString(fmt.Sprintf("  %s%s  %s%-12s%s %s   %s%s%s\n",
-			cursor, box, cWhite, label, cReset, name, statusColor(status, statusActive), status, cReset))
-	}
-
-	for i, f := range s.feats {
 		box := cWhite + "[ ]" + cReset
-		if f.Active() {
+		if e.active {
 			box = cGreen + "[x]" + cReset
 		}
-		renderRow(i, box, f.HotkeyLabel(), f.Name, f.Status(), f.Active())
+		// 热键标签固定宽度（"Ctrl+小键盘 N" = 12 个显示字符）
+		b.WriteString(fmt.Sprintf("  %s%s  %s%-12s%s %s   %s%s%s\n",
+			cursor, box, cWhite, e.label, cReset, e.name,
+			statusColor(e.status, e.active), e.status, cReset))
 	}
-
-	// 一命保护（Ctrl+小键盘 3，仅终极版生效）
-	ol := ori.OneLife()
-	olBox := cWhite + "[ ]" + cReset
-	if ol.Active() {
-		olBox = cGreen + "[x]" + cReset
+	if a.navCursor >= len(rows) {
+		a.navCursor = 0
 	}
-	renderRow(len(s.feats), olBox, "Ctrl+小键盘 3", ol.Name(), ol.Status(), ol.Active())
 
 	b.WriteString(cBox + "  ────────────────────────────────────────────────────────\n" + cReset)
 	if fg {
 		b.WriteString("  " + cCyan + "前台模式" + cReset + ": " + cWhite + "↑↓" + cReset + " 选择   " +
 			cWhite + "回车/空格" + cReset + " 开关   |   " +
-			cWhite + "小键盘 1-8" + cReset + " 功能   " + cWhite + "Ctrl+小键盘" + cReset + " 组合功能\n")
+			cWhite + "小键盘 1-9/0" + cReset + " 前 10 项   " + cWhite + "Ctrl+小键盘" + cReset + " 后 6 项\n")
 	} else {
-		b.WriteString("  " + cDim + "全局热键: 小键盘 1-8 功能 / Ctrl+小键盘 组合功能（切到本窗口可用 ↑↓ 导航）" + cReset + "\n")
+		b.WriteString("  " + cDim + "全局热键: 小键盘 1-9/0（前 10 项）· Ctrl+小键盘 1-6（后 6 项）（切到本窗口可用 ↑↓ 导航）" + cReset + "\n")
 	}
 	b.WriteString("  " + cWhite + "HOME" + cReset + " 全关   " + cWhite + "F12" + cReset + " 重扫   " +
 		cWhite + "F1" + cReset + " 帮助   " + cWhite + "ESC" + cReset + " 返回   " + cWhite + "END" + cReset + " 退出\n")
@@ -446,6 +481,8 @@ func main() {
 			a.setMsg("已重置，重新附加中…")
 		}
 		// ---- 全局热键：仅小键盘数字键（可配 Ctrl）----
+		// 每个功能只有一个快捷键；小键盘 1-9/0 为前 10 项，
+		// Ctrl+小键盘 1-6 为后 6 项（Ctrl+1 是一命保护）。
 		const vkControl = 0x11
 		ctrlDown := core.GetAsyncKeyDown(vkControl)
 
@@ -453,10 +490,16 @@ func main() {
 		for i := 0; i < 9; i++ {
 			if keys.pressed(0x61 + i) {
 				digit := i + 1
+				hit := false
 				for _, f := range s.feats {
 					if f.Digit == digit && f.NeedCtrl == ctrlDown {
 						toggleFeature(a, s, f)
+						hit = true
 					}
+				}
+				// Ctrl+小键盘 1 = 一命保护（不在 feats 列表中）
+				if !hit && ctrlDown && digit == ori.CtrlOneLifeDigit {
+					toggleOneLife(a)
 				}
 			}
 		}
@@ -467,35 +510,23 @@ func main() {
 				}
 			}
 		}
-		// 一命保护：Ctrl + 小键盘 3（仅终极版有意义）
-		if keys.pressed(0x63) && ctrlDown {
-			ol := ori.OneLife()
-			newState := !ol.Active()
-			ol.SetActive(newState)
-			if newState {
-				a.setMsg("已激活: 一命保护 — 死亡如普通模式在检查点复活，成就资格保留")
-			} else {
-				a.setMsg("已关闭: 一命保护")
-			}
-		}
 
 		// ---- 前台导航：修改器窗口在前台时，用 ↑↓ 选择 + 回车/空格切换 ----
 		// 供没有小键盘的键盘使用（全局热键仍可用）。
 		if core.WindowIsForeground() {
+			n := len(navList(s))
 			if keys.pressed(vkUp) || keys.pressed(vkW) {
-				n := navItems(s)
 				if n > 0 {
 					a.navCursor = (a.navCursor - 1 + n) % n
 				}
 			}
 			if keys.pressed(vkDown) || keys.pressed(vkS) {
-				n := navItems(s)
 				if n > 0 {
 					a.navCursor = (a.navCursor + 1) % n
 				}
 			}
 			if keys.pressed(vkReturn) || keys.pressed(vkSpace) {
-				a.navToggleAt(s, a.navCursor)
+				a.navToggle(s, a.navCursor)
 			}
 		}
 
