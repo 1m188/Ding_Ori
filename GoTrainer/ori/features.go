@@ -6,7 +6,7 @@ package ori
 
 import (
 	"fmt"
-	"strings"
+
 	"sync"
 	"sync/atomic"
 )
@@ -132,6 +132,10 @@ type freezeMaxFloat struct {
 	get    func(r *Runtime) (uint32, bool) // 当前值字段
 	getMax func(r *Runtime) (uint32, bool) // 上限字段
 	isInt  bool
+	// 仅用于状态显示: 内存值/scale + unit。生命以"点"存储、1 球 = 4 点，
+	// 界面按球显示才与游戏一致；能量原样显示。
+	scale float32
+	unit  string
 }
 
 func (g *freezeMaxFloat) Tick(r *Runtime) {
@@ -164,8 +168,18 @@ func (g *freezeMaxFloat) Tick(r *Runtime) {
 		}
 		target = mv
 	}
+	if target <= 0 {
+		// 上限本身为 0（例如角色尚未获得能量容器）: 补满没有意义，明确提示，
+		// 避免误以为功能失效。
+		g.f.setStatus("上限为 0，暂无可补满的量")
+		return
+	}
 	if r.Proc.WriteF32(addr, target) {
-		g.f.setStatus(fmt.Sprintf("已补满 = %.0f", target))
+		sc := g.scale
+		if sc <= 0 {
+			sc = 1
+		}
+		g.f.setStatus(fmt.Sprintf("已补满 = %g%s", target/sc, g.unit))
 	} else {
 		g.f.setStatus("写入失败")
 	}
@@ -454,17 +468,15 @@ var (
 	// 整个进程静默退出（实测症状: 修改器无故从任务栏消失）。
 	tickersMu sync.RWMutex
 
-	allTickers  []ticker
-	oneLife     = NewOneLifeProtect() // 一命保护（Ctrl+小键盘 1）
-	xpBoostBase atomic.Int32          // 经验倍率的"未放大基数"
-	xpBoostLast atomic.Int32          // 上次写回的放大值（检测新获得经验）
+	allTickers []ticker
+	oneLife    = NewOneLifeProtect() // 一命保护（Ctrl+小键盘 1）
 
-	// featureActivators 记录需要自定义激活/关闭副作用的执行器
-	// （如经验倍率的单选逻辑），由 UI 层通过 ActivateFeature/DeactivateFeature 调用。
+	// featureActivators 记录需要自定义激活/关闭副作用的执行器，
+	// 由 UI 层通过 ActivateFeature/DeactivateFeature 调用。
 	featureActivators = map[*Feature]func(on bool){}
 
-	// activeRuntime 当前会话的 Runtime（单选互斥时需要它来还原基数）。
-	// UI 层在创建会话后调用 SetActiveRuntime 设置。
+	// activeRuntime 当前会话的 Runtime。UI 层在创建会话后调用
+	// SetActiveRuntime 设置。
 	activeRuntime *Runtime
 )
 
@@ -500,21 +512,38 @@ func DeactivateFeature(f *Feature, r *Runtime) {
 	if !f.Active() {
 		return
 	}
-	// 可还原型执行器: setFloat（倍率放大）、xpBoostOption（经验倍率）
+	// 可还原型执行器: setFloat / multiFloatMul（倍率放大）、
+	// infiniteDoubleJump（能力开关）
 	tickersMu.RLock()
 	snapshot := allTickers
 	tickersMu.RUnlock()
 	for _, t := range snapshot {
-		if sf, ok := t.(*setFloat); ok && sf.f == f {
+		switch ex := t.(type) {
+		case *setFloat:
+			if ex.f != f {
+				continue
+			}
 			if r != nil {
-				sf.OnDeactivate(r)
+				ex.OnDeactivate(r)
 			} else {
-				sf.f.have.Store(false)
+				ex.f.have.Store(false)
 			}
 			goto done
-		}
-		if xb, ok := t.(*xpBoostOption); ok && xb.f == f {
-			xb.OnDeactivate(r)
+		case *multiFloatMul:
+			if ex.f != f {
+				continue
+			}
+			if r != nil {
+				ex.OnDeactivate(r)
+			}
+			goto done
+		case *infiniteDoubleJump:
+			if ex.f != f {
+				continue
+			}
+			if r != nil {
+				ex.OnDeactivate(r)
+			}
 			goto done
 		}
 	}
@@ -548,82 +577,192 @@ func DeactivateAll(fs []*Feature, r *Runtime) {
 		DeactivateFeature(f, r)
 	}
 	oneLife.SetActive(false)
-	xpBoostBase.Store(0)
-	xpBoostLast.Store(0)
 }
 
-// ---------- 经验倍率（Ctrl+小键盘 3/4/5/6）----------
+// ---------- 能力点数：不足则补满 ----------
 
-// xpBoostOption 经验倍率选项（单选语义: 激活一个会自动关闭其它倍率）。
+// setIntMin 「不足才补满」整数执行器。
 //
-// 语义: "获得经验放大 N 倍"。维护一个"未放大的基数" base：
-//   - 激活时以当前 Experience 为基数；
-//   - 每周期读回 Experience（cur），若 cur > 上次写入值（last），说明玩家
-//     又获得了经验，把增量并入基数（base += cur-last），使新获得的经验
-//     同样被放大；
-//   - 若 cur < last（升级消耗或被游戏改写），重建基数 = cur；
-//   - 目标值 = base × N，持续写回。
+// 语义: 当前值 < target 时写入 target；已达到或超过则**不动**。
 //
-// 关闭时把 base 写回（保留玩家实际获得的经验，去掉放大出来的部分），
-// 与超级跳等"可还原"功能语义一致。
-type xpBoostOption struct {
-	f    *Feature
-	mult float32
+// 为什么不持续写: 游戏在升级时会自行 SkillPoints++（见 SeinLevel.LevelUp），
+// 若每周期强行写回同一个值，会与游戏的结算反复互相覆盖，表现为点数持续
+// 变化并反复触发升级动画。改为"不足才补"后，只在被消耗（学技能）时补满。
+type setIntMin struct {
+	f      *Feature
+	get    func(r *Runtime) (uint32, bool)
+	target int32
 }
 
-// Tick 报告状态并驱动倍率写入。
-func (g *xpBoostOption) Tick(r *Runtime) {
+func (g *setIntMin) Tick(r *Runtime) {
 	if !g.f.Active() {
 		return
 	}
-	_, level, _, _, _, _ := r.Addrs()
-	if level == 0 {
-		g.f.setStatus("等待定位…")
+	addr, ok := g.get(r)
+	if !ok {
+		g.f.setStatus("地址解析失败")
 		return
 	}
-	addr := level + OffLevelExperience
 	cur, ok := r.Proc.ReadI32(addr)
 	if !ok {
 		g.f.setStatus("读取失败")
 		return
 	}
-
-	base := xpBoostBase.Load()
-	last := xpBoostLast.Load()
-	switch {
-	case base == 0:
-		base = cur // 首次捕获
-	case cur > last:
-		base += cur - last // 新获得的经验也放大
-	case cur < last:
-		base = cur // 升级消耗/被改写 → 重建
+	if cur >= g.target {
+		g.f.setStatus(fmt.Sprintf("已就绪 = %d", cur))
+		return
 	}
-	xpBoostBase.Store(base)
-	target := int32(float32(base) * g.mult)
-	if r.Proc.WriteI32(addr, target) {
-		xpBoostLast.Store(target)
-		g.f.setStatus(fmt.Sprintf("已放大 %gx (%d→%d)", g.mult, base, target))
+	if r.Proc.WriteI32(addr, g.target) {
+		g.f.setStatus(fmt.Sprintf("已补满 %d → %d", cur, g.target))
 	} else {
 		g.f.setStatus("写入失败")
 	}
 }
 
-// OnDeactivate 还原为未放大的基数。
-func (g *xpBoostOption) OnDeactivate(r *Runtime) {
-	base := xpBoostBase.Load()
-	xpBoostBase.Store(0)
-	xpBoostLast.Store(0)
-	if r == nil || base == 0 {
+// ---------- 多字段倍率（超级跳）----------
+
+// multiFloatMul 同时放大多个浮点字段，关闭时逐个还原。
+//
+// 为什么需要多个字段: 跳跃高度不是单一变量。PerformJump 会按情形分支——
+//   - 移动中跳: 依次轮换 FirstJumpHeight / SecondJumpHeight / ThirdJumpHeight
+//   - 站立跳:   同样轮换这三个
+//   - 贴墙下滑跳 / 蹲跳 / 转身后空翻: 另用第一高度 / CrouchJumpHeight / BackflipJumpHeight
+//
+// 只放大 FirstJumpHeight 会导致"有的跳得高、有的照旧"（实测每两三次一次高）。
+//
+// 地址在角色重生后会变，因此按字段序号记录"上次写入的地址与原值"，
+// 地址变化时重新捕获。
+type multiFloatMul struct {
+	f    *Feature
+	mult float32
+	gets []func(r *Runtime) (uint32, bool)
+	addr []uint32
+	orig []float32
+}
+
+func (g *multiFloatMul) Tick(r *Runtime) {
+	if !g.f.Active() {
 		return
 	}
-	_, level, _, _, _, _ := r.Addrs()
-	if level == 0 {
+	if g.addr == nil {
+		g.addr = make([]uint32, len(g.gets))
+		g.orig = make([]float32, len(g.gets))
+	}
+	done, total := 0, 0
+	for i, get := range g.gets {
+		a, ok := get(r)
+		if !ok {
+			continue
+		}
+		total++
+		if g.addr[i] != a {
+			v, ok2 := r.Proc.ReadF32(a)
+			if !ok2 {
+				g.addr[i] = 0
+				continue
+			}
+			g.addr[i], g.orig[i] = a, v
+		}
+		if r.Proc.WriteF32(a, g.orig[i]*g.mult) {
+			done++
+		}
+	}
+	switch {
+	case total == 0:
+		g.f.setStatus("地址解析失败")
+	case done == 0:
+		g.f.setStatus("写入失败")
+	default:
+		g.f.setStatus(fmt.Sprintf("已放大 %.1fx（%d 项跳跃高度）", g.mult, done))
+	}
+}
+
+func (g *multiFloatMul) OnDeactivate(r *Runtime) {
+	for i := range g.addr {
+		if g.addr[i] != 0 {
+			r.Proc.WriteF32(g.addr[i], g.orig[i])
+			g.addr[i] = 0
+		}
+	}
+}
+
+// ---------- 无限二段跳 ----------
+
+// infiniteDoubleJump 无限二段跳。
+//
+// 只写 m_numberOfJumpsAvailable 是不够的: 游戏每帧执行
+// DoubleJump.SetStateActive(AllowDoubleJump)，而 AllowDoubleJump 要求
+// PlayerAbilities.DoubleJump.HasAbility 为真。没有该能力时状态永远不激活，
+// SeinController.PerformJump 里根本不会走到二段跳分支（实测确认:
+// 玩家初始 HasAbility=0，因此该功能无效）。
+//
+// 因此需要: ① 把能力开关置 1（关闭时还原原值）；
+//
+//	② 持续维持 m_numberOfJumpsAvailable，实现"无限"。
+type infiniteDoubleJump struct {
+	f      *Feature
+	abilit uint32 // CharacterAbility.HasAbility 字段地址
+	orig   byte
+	have   bool
+}
+
+func (g *infiniteDoubleJump) Tick(r *Runtime) {
+	if !g.f.Active() {
 		return
 	}
-	r.Proc.WriteI32(level+OffLevelExperience, base)
+	sein, _, _, _, dbl, _ := r.Addrs()
+	if sein == 0 || dbl == 0 {
+		g.f.setStatus("地址解析失败")
+		return
+	}
+
+	// ① 能力开关（1 字节，不能按 4 字节写，否则会覆盖相邻字段）
+	granted := false
+	if pa, ok := r.Proc.ReadU32(sein + OffSeinPlayerAbil); ok && isHeapPtr(pa) {
+		if obj, ok2 := r.Proc.ReadU32(pa + OffPlayerAbilitiesDoubleJump); ok2 && isHeapPtr(obj) {
+			a := obj + OffAbilityHasAbility
+			if !g.have {
+				if v, ok3 := r.Proc.ReadU8(a); ok3 {
+					g.abilit, g.orig, g.have = a, v, true
+				}
+			}
+			if r.Proc.WriteU8(a, 1) {
+				granted = true
+			}
+		}
+	}
+
+	// ② 跳跃次数
+	counted := r.Proc.WriteI32(dbl+OffDoubleJumpCount, 999)
+	switch {
+	case !granted && !counted:
+		g.f.setStatus("地址解析失败")
+	case !granted:
+		g.f.setStatus("已维持跳跃次数（能力开关未就绪）")
+	case !counted:
+		g.f.setStatus("已启用二段跳（次数写入失败）")
+	default:
+		g.f.setStatus("无限二段跳已启用")
+	}
+}
+
+func (g *infiniteDoubleJump) OnDeactivate(r *Runtime) {
+	if g.have && g.abilit != 0 {
+		r.Proc.WriteU8(g.abilit, g.orig)
+	}
+	g.have, g.abilit = false, 0
 }
 
 // ---------- 功能表 ----------
+
+// jumpField 读取 SeinJump 上某个跳跃高度字段的地址。
+func jumpField(r *Runtime, off uint32) (uint32, bool) {
+	_, _, _, jump, _, _ := r.Addrs()
+	if jump == 0 {
+		return 0, false
+	}
+	return jump + off, true
+}
 
 // BuildFeatures 构建功能表（键位对齐风灵月影 DE v1.0 Plus 13）。
 //
@@ -634,8 +773,6 @@ func BuildFeatures() []*Feature {
 	defer tickersMu.Unlock()
 	allTickers = nil
 	featureActivators = map[*Feature]func(on bool){}
-	xpBoostBase.Store(0)
-	xpBoostLast.Store(0)
 
 	// ---- 字段地址闭包 ----
 	// 注意: 所有闭包一律通过 r.Addrs() 取地址（内部加锁）。
@@ -646,13 +783,6 @@ func BuildFeatures() []*Feature {
 			return 0, false
 		}
 		return level + OffLevelSkillPoints, true
-	}
-	lvlEXP := func(r *Runtime) (uint32, bool) {
-		_, level, _, _, _, _ := r.Addrs()
-		if level == 0 {
-			return 0, false
-		}
-		return level + OffLevelExperience, true
 	}
 	// healthObj 解析 SeinCharacter -> Mortality -> HealthController 链。
 	healthObj := func(r *Runtime) (uint32, bool) {
@@ -723,40 +853,21 @@ func BuildFeatures() []*Feature {
 		}
 		return soul + OffSoulFlameCooldownRemaining, true
 	}
-	jumpH := func(r *Runtime) (uint32, bool) {
-		_, _, _, jump, _, _ := r.Addrs()
-		if jump == 0 {
-			return 0, false
-		}
-		return jump + OffJumpFirstHeight, true
-	}
-	jumpImp := func(r *Runtime) (uint32, bool) {
-		_, _, _, jump, _, _ := r.Addrs()
-		if jump == 0 {
-			return 0, false
-		}
-		return jump + OffJumpImpulse, true
-	}
-	dblCount := func(r *Runtime) (uint32, bool) {
-		_, _, _, _, dbl, _ := r.Addrs()
-		if dbl == 0 {
-			return 0, false
-		}
-		return dbl + OffDoubleJumpCount, true
-	}
-	dblStrength := func(r *Runtime) (uint32, bool) {
-		_, _, _, _, dbl, _ := r.Addrs()
-		if dbl == 0 {
-			return 0, false
-		}
-		return dbl + OffDoubleJumpStrength, true
+
+	jumpHeightFields := []func(*Runtime) (uint32, bool){
+		func(r *Runtime) (uint32, bool) { return jumpField(r, OffJumpFirstHeight) },
+		func(r *Runtime) (uint32, bool) { return jumpField(r, OffJumpSecondHeight) },
+		func(r *Runtime) (uint32, bool) { return jumpField(r, OffJumpThirdHeight) },
+		func(r *Runtime) (uint32, bool) { return jumpField(r, OffJumpCrouchHeight) },
+		func(r *Runtime) (uint32, bool) { return jumpField(r, OffJumpBackflipHeight) },
+		func(r *Runtime) (uint32, bool) { return jumpField(r, OffJumpIdleHeight) },
 	}
 
 	// ---- 构造器 ----
 	// 无限生命/能量: 持续补满到上限（而非冻结激活瞬间值）
-	newRefill := func(digit int, name string, get, getMax func(*Runtime) (uint32, bool), isInt bool) *Feature {
+	newRefill := func(digit int, name string, get, getMax func(*Runtime) (uint32, bool), isInt bool, scale float32, unit string) *Feature {
 		f := NewFeature(digit, name)
-		allTickers = append(allTickers, &freezeMaxFloat{f: f, get: get, getMax: getMax, isInt: isInt})
+		allTickers = append(allTickers, &freezeMaxFloat{f: f, get: get, getMax: getMax, isInt: isInt, scale: scale, unit: unit})
 		return f
 	}
 	newZeroFloat := func(digit int, name string, get func(*Runtime) (uint32, bool)) *Feature {
@@ -764,17 +875,22 @@ func BuildFeatures() []*Feature {
 		allTickers = append(allTickers, &zeroFloat{f: f, get: get})
 		return f
 	}
-	newMultiplier := func(digit int, name string, get func(*Runtime) (uint32, bool), mult float32) *Feature {
-		f := NewFeature(digit, name)
-		t := &setFloat{f: f, get: get, Multiplier: mult}
-		allTickers = append(allTickers, t)
+	// 超级跳: 同时放大所有跳跃高度字段（见 multiFloatMul 说明）
+	newSuperJump := func(digit int, mult float32) *Feature {
+		f := NewFeature(digit, "超级跳")
+		allTickers = append(allTickers, &multiFloatMul{f: f, mult: mult, gets: jumpHeightFields})
 		return f
 	}
-	newCounterLock := func(digit int, name string, get func(*Runtime) (uint32, bool), target int32) *Feature {
+	// 无限二段跳: 需要同时开启能力开关（见 infiniteDoubleJump 说明）
+	newInfiniteDoubleJump := func(digit int) *Feature {
+		f := NewFeature(digit, "无限二段跳")
+		allTickers = append(allTickers, &infiniteDoubleJump{f: f})
+		return f
+	}
+	// 能力点数: 不足才补满（见 setIntMin 说明）
+	newIntMin := func(digit int, name string, get func(*Runtime) (uint32, bool), target int32) *Feature {
 		f := NewFeature(digit, name)
-		t := target
-		f.FixedTarget = &t
-		allTickers = append(allTickers, &setInt{f: f, get: get, Target: t})
+		allTickers = append(allTickers, &setIntMin{f: f, get: get, target: target})
 		return f
 	}
 	// 不安全区域也可建立灵魂链接（小键盘 4，对齐 FLiNG 键位）
@@ -790,54 +906,23 @@ func BuildFeatures() []*Feature {
 		allTickers = append(allTickers, &freezeInt{f: f, get: get, fixed: &t})
 		return f
 	}
-	// 经验倍率选项（单选语义: 同时只有一个倍率生效）
-	newXPBoost := func(digit int, mult float32) *Feature {
-		f := NewCtrlFeature(digit, fmt.Sprintf("经验倍率 %.0fx", mult))
-		allTickers = append(allTickers, &xpBoostOption{f: f, mult: mult})
-		// 单选语义: 激活某倍率时关闭其它倍率（关闭会经 OnDeactivate 还原基数）
-		featureActivators[f] = func(on bool) {
-			if !on {
-				return
-			}
-			for other := range featureActivators {
-				if other != f && other.Active() && strings.HasPrefix(other.Name, "经验倍率") {
-					DeactivateFeature(other, activeRuntime)
-				}
-			}
-			xpBoostBase.Store(0) // 重新捕获基数
-			xpBoostLast.Store(0)
-		}
-		return f
-	}
-
 	// 键位分配原则: 每个功能只有一个快捷键；优先填满小键盘 1-9/0（10 个），
 	// 溢出部分再用 Ctrl+小键盘。一命保护占用 Ctrl+小键盘 1（见 oneLife 单例）。
-	newFixedInt := func(digit int, name string, get func(*Runtime) (uint32, bool), target int32) *Feature {
-		f := NewFeature(digit, name)
-		t := target
-		f.FixedTarget = &t
-		allTickers = append(allTickers, &freezeInt{f: f, get: get, fixed: &t})
-		return f
-	}
 
 	return []*Feature{
 		// ===== 小键盘 1-9/0（前 10 项）=====
-		newRefill(1, "无限生命", hp, hpMax, true),
-		newRefill(2, "无限能量", en, enMax, false),
+		newRefill(1, "无限生命", hp, hpMax, true, HealthPointsPerCell, " 球"),
+		newRefill(2, "无限能量", en, enMax, false, 1, ""),
 		newZeroFloat(3, "灵魂链接无需冷却", soulCd),
 		newSoulFlameAnywhere(), // 小键盘 4
-		newMultiplier(5, "超级跳", jumpH, 2.5),
-		newMultiplier(6, "超级跳冲量", jumpImp, 2.0),
-		newCounterLock(7, "无限二段跳", dblCount, 99),
-		newMultiplier(8, "二段跳强化", dblStrength, 2.0),
-		newFixedInt(9, "无限经验", lvlEXP, 999999),
-		newFixedInt(0, "无限能力点数", lvlSP, 999),
+		newSuperJump(5, 2.5),
+		// 小键盘 6 空位（原"超级跳冲量"已移除）
+		newInfiniteDoubleJump(7),
+		// 小键盘 8 空位（原"二段跳强化"已移除）
+		// 小键盘 9 空位（原"无限经验"已移除：能力由"无限能力点数"直接提供）
+		newIntMin(0, "无限能力点数", lvlSP, 999),
 		// ===== Ctrl+小键盘（第 11 项起；Ctrl+1 为一命保护，见 oneLife）=====
 		newCtrlCounterLock(2, "死亡数归零", deaths, 0),
-		newXPBoost(3, 2),
-		newXPBoost(4, 4),
-		newXPBoost(5, 8),
-		newXPBoost(6, 16),
 	}
 }
 

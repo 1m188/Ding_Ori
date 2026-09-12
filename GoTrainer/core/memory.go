@@ -147,6 +147,20 @@ func (p *Process) WriteF32(addr uint32, v float32) bool {
 	return p.WriteU32(addr, *(*uint32)(unsafe.Pointer(&v)))
 }
 
+// ReadU8 / WriteU8 单字节（mono 的 bool 字段只有 1 字节，不能用 4 字节写入，
+// 否则会覆盖相邻字段）。
+func (p *Process) ReadU8(addr uint32) (byte, bool) {
+	var b [1]byte
+	if !p.ReadBytes(addr, b[:]) {
+		return 0, false
+	}
+	return b[0], true
+}
+
+func (p *Process) WriteU8(addr uint32, v byte) bool {
+	return p.WriteBytes(addr, []byte{v})
+}
+
 // WalkChain 指针链遍历: cur = base+offs[0]; 之后每步先解引用再加下一个偏移;
 // 最终地址 = 最后一次解引用值 + 末偏移。与 CE 指针路径一致。
 func (p *Process) WalkChain(base uint32, offs []uint32) (uint32, bool) {

@@ -734,6 +734,11 @@ type Snapshot struct {
 	EnergyMax   float32
 	HealthCur   float32
 	HealthMax   int32
+	// 生命球数（游戏界面单位）。内存里的生命以"点"计，1 球 = 4 点
+	// （见 SeinHealthController.HealthUpgradesCollected => MaxHealth/4 - 3），
+	// UI 必须按球显示才与游戏一致（初始 3 球，内存为 12 点）。
+	HealthCells    float32
+	HealthMaxCells int32
 }
 
 // Read 读取当前全部运行值（不改任何东西）。
@@ -767,6 +772,8 @@ func (r *Runtime) Read() Snapshot {
 			if h, ok2 := p.ReadU32(mor + OffMortalityHealth); ok2 && isHeapPtr(h) {
 				s.HealthCur, _ = p.ReadF32(h + OffHealthAmount)
 				s.HealthMax, _ = p.ReadI32(h + OffHealthMaxHealth)
+				s.HealthCells = s.HealthCur / HealthPointsPerCell
+				s.HealthMaxCells = s.HealthMax / HealthPointsPerCell
 			}
 		}
 	}

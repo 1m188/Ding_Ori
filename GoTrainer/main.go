@@ -439,8 +439,9 @@ func renderTrainer(a *app, s *session) {
 		}
 		b.WriteString(st + "\n")
 		if snap.SeinOK {
-			b.WriteString(fmt.Sprintf("  实时: 生命 %.0f/%d   能量 %.1f/%.1f   技能点 %d   经验 %d   死亡 %d\n",
-				snap.HealthCur, snap.HealthMax, snap.EnergyCur, snap.EnergyMax, snap.SkillPoints, snap.Experience, snap.Deaths))
+			b.WriteString(fmt.Sprintf("  实时: 生命 %g/%d 球   能量 %.1f/%.1f   技能点 %d   死亡 %d\n",
+				snap.HealthCells, snap.HealthMaxCells, snap.EnergyCur, snap.EnergyMax,
+				snap.SkillPoints, snap.Deaths))
 		}
 	}
 

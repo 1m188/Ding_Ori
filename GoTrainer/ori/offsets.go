@@ -95,6 +95,31 @@ const (
 	OffSeinPlayerAbil  = 0x4C // SeinCharacter +0x4C -> PlayerAbilities
 )
 
+// PlayerAbilities 能力开关偏移。
+//
+// 取值路径: SeinCharacter.PlayerAbilities(+0x4C) -> PlayerAbilities 对象
+//
+//	-> 能力字段（CharacterAbility 引用）-> CharacterAbility.HasAbility(+0x08)。
+//
+// 注意: 这两个偏移经 mono 元数据直读核验，**与源码字段声明顺序不同**
+// （mono 会重排字段；按声明顺序推算得到 0x18/0x48，实测为 0x24/0x54）。
+//
+// 用途: 二段跳能否触发取决于 PlayerAbilities.DoubleJump.HasAbility ——
+// 游戏每帧执行 DoubleJump.SetStateActive(AllowDoubleJump)，而
+// AllowDoubleJump 要求该能力为真；否则 PerformJump 永远不会进入二段跳分支。
+const (
+	OffPlayerAbilitiesDoubleJump        = 0x24
+	OffPlayerAbilitiesDoubleJumpUpgrade = 0x54
+	OffAbilityHasAbility                = 0x08 // CharacterAbility.HasAbility (bool, 1 字节)
+)
+
+// 生命值单位换算。
+//
+// SeinHealthController.HealthUpgradesCollected => MaxHealth/4 - 3，
+// 即游戏内部**一个生命球 = 4 点**。游戏界面显示的是球数，而内存里是点数:
+// 初始 3 球 => MaxHealth = 12。UI 显示需除以该系数才与游戏一致。
+const HealthPointsPerCell = 4
+
 // SeinSoulFlame 字段偏移（灵魂链接: 冷却/安全区域）。
 // 来源: CE mono dissect dump（DE v1.0）。
 const (
