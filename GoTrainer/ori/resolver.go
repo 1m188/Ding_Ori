@@ -55,8 +55,10 @@ type Runtime struct {
 	// --- 独立单例（后台异步定位，可重试）---
 	DeathCounter   uint32 // SeinDeathCounter.Instance
 	DiffController uint32 // DifficultyController.Instance
+	GameWorld      uint32 // GameWorld.Instance（探索度所在）
 	deathSlot      uint32 // 上述单例的静态槽地址（重读用）
 	diffSlot       uint32
+	worldSlot      uint32
 
 	// 定位诊断
 	LastScanError string // 失败原因（UI 显示）
@@ -87,8 +89,10 @@ func (r *Runtime) SetProcess(p *core.Process) {
 	r.DoubleJump = 0
 	r.DeathCounter = 0
 	r.DiffController = 0
+	r.GameWorld = 0
 	r.deathSlot = 0
 	r.diffSlot = 0
+	r.worldSlot = 0
 	r.LastScanError = ""
 	r.auxBusy = false
 	r.auxTried = time.Time{}
@@ -121,6 +125,13 @@ func (r *Runtime) LowestDiffAddress() (uint32, bool) {
 		return 0, false
 	}
 	return r.DiffController + OffDiffLowest, true
+}
+
+// GameWorldAddr 返回 GameWorld.Instance（探索度载体），未定位返回 0。
+func (r *Runtime) GameWorldAddr() uint32 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.GameWorld
 }
 
 // SubAddr 返回已定位子对象的地址（诊断/测试用）。
@@ -297,10 +308,14 @@ func validateSein(p *core.Process, v uint32) bool {
 	if back, ok := p.ReadU32(lvl + OffLevelMSein); !ok || back != v {
 		return false
 	}
-	// 能量: 0 <= Current <= Max, Max 合理
+	// 能量: 数值合理即可。
+	// 注意不能要求 Current <= Max —— 拾取瞬间/被外部改写时可能出现
+	// Current > Max 的暂态，若据此判定"非法"，会把真正的活体玩家对象
+	// 也一并拒掉（实测踩到：写入 Max 后解析器整体定位失败）。
 	cur, okc := p.ReadF32(en + OffEnergyCurrent)
 	max, okm := p.ReadF32(en + OffEnergyMax)
-	if !okc || !okm || cur < -0.01 || max < 0 || max > 1000 || cur > max+0.01 {
+	if !okc || !okm || math.IsNaN(float64(cur)) || math.IsNaN(float64(max)) ||
+		cur < -0.01 || cur > 10000 || max < 0 || max > 10000 {
 		return false
 	}
 	// 生命: 0 <= Amount <= MaxHealth, MaxHealth 合理
@@ -310,7 +325,7 @@ func validateSein(p *core.Process, v uint32) bool {
 	}
 	amt, oka := p.ReadF32(h + OffHealthAmount)
 	mh, okx := p.ReadI32(h + OffHealthMaxHealth)
-	if !oka || !okx || amt < -0.01 || mh < 4 || mh > 400 || amt > float32(mh)+0.01 {
+	if !oka || !okx || math.IsNaN(float64(amt)) || amt < -0.01 || amt > 100000 || mh < 1 || mh > 100000 {
 		return false
 	}
 	return true
@@ -504,37 +519,38 @@ func (r *Runtime) Refresh() bool {
 	return true
 }
 
-// refreshAuxSlots 以已缓存的静态槽为准重读死亡计数/难度控制器；
+// auxFound 后台扫描到的单例（对象地址 + 其静态槽地址）。
+type auxFound struct {
+	death, deathSlot uint32
+	diff, diffSlot   uint32
+	world, worldSlot uint32
+}
+
+// refreshAuxSlots 以已缓存的静态槽为准重读附属单例；
 // 槽失效时清空，交由 resolveAux 重新扫描。
 func (r *Runtime) refreshAuxSlots(p *core.Process) {
 	r.mu.Lock()
-	ds, dfs := r.deathSlot, r.diffSlot
+	ds, dfs, ws := r.deathSlot, r.diffSlot, r.worldSlot
 	r.mu.Unlock()
 
-	if ds != 0 {
-		if v := r.auxFromSlot(p, ds, "SeinDeathCounter"); v != 0 {
+	setOrClear := func(slot uint32, want string, dst *uint32, clearSlot *uint32) {
+		if slot == 0 {
+			return
+		}
+		if v := r.auxFromSlot(p, slot, want); v != 0 {
 			r.mu.Lock()
-			r.DeathCounter = v
+			*dst = v
 			r.mu.Unlock()
 		} else {
 			r.mu.Lock()
-			r.DeathCounter = 0
-			r.deathSlot = 0
+			*dst = 0
+			*clearSlot = 0
 			r.mu.Unlock()
 		}
 	}
-	if dfs != 0 {
-		if v := r.auxFromSlot(p, dfs, "DifficultyController"); v != 0 {
-			r.mu.Lock()
-			r.DiffController = v
-			r.mu.Unlock()
-		} else {
-			r.mu.Lock()
-			r.DiffController = 0
-			r.diffSlot = 0
-			r.mu.Unlock()
-		}
-	}
+	setOrClear(ds, "SeinDeathCounter", &r.DeathCounter, &r.deathSlot)
+	setOrClear(dfs, "DifficultyController", &r.DiffController, &r.diffSlot)
+	setOrClear(ws, "GameWorld", &r.GameWorld, &r.worldSlot)
 }
 
 // auxFromSlot 重读静态槽并确认其中对象仍属于期望类型。
@@ -572,7 +588,8 @@ func (r *Runtime) resolveAux(p *core.Process, sein uint32) {
 	}
 	needDeath := r.DeathCounter == 0
 	needDiff := r.DiffController == 0
-	if !needDeath && !needDiff {
+	needWorld := r.GameWorld == 0
+	if !needDeath && !needDiff && !needWorld {
 		r.mu.Unlock()
 		return
 	}
@@ -593,17 +610,22 @@ func (r *Runtime) resolveAux(p *core.Process, sein uint32) {
 			r.auxBusy = false
 			r.mu.Unlock()
 		}()
-		death, diff, dSlot, dfSlot := scanLowBandAux(p, sein)
+		found := scanLowBandAux(p, sein)
 		r.mu.Lock()
 		gotAny := false
-		if needDeath && death != 0 {
-			r.DeathCounter = death
-			r.deathSlot = dSlot
+		if needDeath && found.death != 0 {
+			r.DeathCounter = found.death
+			r.deathSlot = found.deathSlot
 			gotAny = true
 		}
-		if needDiff && diff != 0 {
-			r.DiffController = diff
-			r.diffSlot = dfSlot
+		if needDiff && found.diff != 0 {
+			r.DiffController = found.diff
+			r.diffSlot = found.diffSlot
+			gotAny = true
+		}
+		if needWorld && found.world != 0 {
+			r.GameWorld = found.world
+			r.worldSlot = found.worldSlot
 			gotAny = true
 		}
 		if gotAny {
@@ -630,7 +652,8 @@ func (r *Runtime) auxBackoff() time.Duration {
 //   - DifficultyController: 类名匹配 + Difficulty/Lowest ∈ [0,3]
 //
 // 多个候选时优先取引用活体 Sein 的那个（死亡计数）。
-func scanLowBandAux(p *core.Process, sein uint32) (death, diff, deathSlot, diffSlot uint32) {
+func scanLowBandAux(p *core.Process, sein uint32) auxFound {
+	var out auxFound
 	const chunk = 4 << 20
 	cache := map[uint32]string{}
 	classOfAt := func(obj uint32) string {
@@ -695,12 +718,20 @@ func scanLowBandAux(p *core.Process, sein uint32) (death, diff, deathSlot, diffS
 						}
 					}
 				}
-				if diff == 0 {
+				if out.diff == 0 {
 					d1, ok1 := p.ReadI32(v + OffDiffDifficulty)
 					d2, ok2 := p.ReadI32(v + OffDiffLowest)
 					if ok1 && ok2 && d1 >= 0 && d1 <= 3 && d2 >= 0 && d2 <= 3 {
 						if classOfAt(v) == "DifficultyController" {
-							diff, diffSlot = v, slot
+							out.diff, out.diffSlot = v, slot
+						}
+					}
+				}
+				if out.world == 0 {
+					// GameWorld: 用 RuntimeAreas 指针做便宜预筛
+					if ra, ok := p.ReadU32(v + OffGameWorldRuntimeAreas); ok && isHeapPtr(ra) {
+						if classOfAt(v) == "GameWorld" {
+							out.world, out.worldSlot = v, slot
 						}
 					}
 				}
@@ -708,15 +739,15 @@ func scanLowBandAux(p *core.Process, sein uint32) (death, diff, deathSlot, diffS
 		}
 	}
 	if deathRef != 0 {
-		death, deathSlot = deathRef, deathRefSlot
+		out.death, out.deathSlot = deathRef, deathRefSlot
 	} else {
-		death, deathSlot = deathAny, deathAnySlot
+		out.death, out.deathSlot = deathAny, deathAnySlot
 	}
 	if debugAux {
-		fmt.Fprintf(os.Stderr, "[aux] sein=%08X cand=%d death=%08X slot=%08X diff=%08X dslot=%08X\n",
-			sein, len(seen), death, deathSlot, diff, diffSlot)
+		fmt.Fprintf(os.Stderr, "[aux] sein=%08X cand=%d death=%08X slot=%08X diff=%08X dslot=%08X world=%08X wslot=%08X\n",
+			sein, len(seen), out.death, out.deathSlot, out.diff, out.diffSlot, out.world, out.worldSlot)
 	}
-	return death, diff, deathSlot, diffSlot
+	return out
 }
 
 // ---------- 快照（TUI 渲染用）----------

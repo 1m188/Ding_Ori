@@ -59,12 +59,12 @@ func init() {
 	// （旧实现每次 ESC[2J + 从头写，在窗口比内容矮时会持续滚屏、滚动条
 	//  一直下移）。不支持 1049 的宿主会忽略该序列，此时仍有 render() 的
 	// 高度截断 + ESC[J 兜底。
-	writeConsole("\x1b[?1049h\x1b[?25l")
+	writeConsole("\x1b[?1049h\x1b[?25l\x1b[?7l")
 }
 
 // cleanupConsole 退出前恢复终端状态（os.Exit 不会执行 defer）。
 func cleanupConsole() {
-	writeConsole("\x1b[?25h\x1b[?1049l")
+	writeConsole("\x1b[?7h\x1b[?25h\x1b[?1049l")
 }
 
 // ---------- 画面输出 ----------
@@ -92,17 +92,31 @@ func windowHeight() int {
 	return h
 }
 
-// render 输出一帧: 光标归位 → 写内容 → 清除下方残留。
+// render 输出一帧: 光标归位 → 重写整屏 → 每行清除行尾残留。
 //
-// 内容按"窗口高度 - 1"截断: 只要不写到最后一行的换行就不会触发滚动，
-// 这样界面始终原地刷新，滚动条不会下移。
+// 关键: **每次重写窗口的每一行**（不足处补空行），并给每行追加 ESC[K
+// （清除该行光标之后的残留）。此前只写内容行 + ESC[J，在"内容变短"时
+// （例如关闭功能后描述文本变短、或从修改器界面退回选择界面）会留下
+// 上一帧的字符，表现为界面重叠。
+//
+// 最后一行不写换行，因此不会触发滚动（配合备用屏幕缓冲区，滚动条不动）。
 func render(s string) {
 	s = strings.TrimRight(s, "\n")
 	lines := strings.Split(s, "\n")
-	if max := windowHeight() - 1; len(lines) > max && max > 0 {
-		lines = lines[:max]
+	rows := windowHeight() - 1
+	if rows < 1 {
+		rows = 1
 	}
-	writeConsole("\x1b[H" + strings.Join(lines, "\n") + "\x1b[J")
+	if len(lines) > rows {
+		lines = lines[:rows]
+	}
+	for len(lines) < rows {
+		lines = append(lines, "")
+	}
+	for i := range lines {
+		lines[i] += "\x1b[K"
+	}
+	writeConsole("\x1b[H" + strings.Join(lines, "\n"))
 }
 
 // ---------- 控制台输入（界面按键的唯一来源） ----------
@@ -520,7 +534,7 @@ func renderTrainer(a *app, s *session) {
 
 	b.WriteString(cBox + "  ────────────────────────────────────────────────────────\n" + cReset)
 	b.WriteString("  " + cDim + "本窗口: ↑↓ 选择 · 回车/空格 开关   |   " + cReset +
-		cWhite + "小键盘 1-7" + cReset + " · " + cWhite + "Ctrl+小键盘 1-2" + cReset + "（全局，免切窗）   " +
+		cWhite + "小键盘 1-9/0" + cReset + " · " + cWhite + "Ctrl+小键盘 1-4" + cReset + "（全局，免切窗）   " +
 		cWhite + "HOME" + cReset + " 全关   " + cWhite + "F12" + cReset + " 重扫   " +
 		cWhite + "F1" + cReset + " 帮助   " + cWhite + "ESC" + cReset + " 返回   " + cWhite + "END" + cReset + " 退出\n")
 	b.WriteString("  " + cDim + a.getMsg() + cReset + "\n")

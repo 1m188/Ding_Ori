@@ -698,6 +698,182 @@ func (g *multiFloatMul) OnDeactivate(r *Runtime) {
 	}
 }
 
+// ---------- 满生命球 / 满能量球 ----------
+
+// refillTo 把"上限字段"补到目标值，并把当前值补满；已达上限则不再改动。
+//
+// 用于"满生命球""满能量球"这类需求: 补到满、已满则不动（幂等）。
+type refillTo struct {
+	f        *Feature
+	getMax   func(r *Runtime) (uint32, bool) // 上限字段
+	getCur   func(r *Runtime) (uint32, bool) // 当前值字段（写入用，float）
+	maxIsInt bool                            // 上限是否为 int32
+	target   float32                         // 目标上限（int 时为内部点数）
+	divisor  float32                         // 显示换算（生命: 点数/4 = 球数）
+	unit     string
+	didWrite bool // 本次激活期间是否写过（用于状态显示）
+}
+
+func (g *refillTo) Tick(r *Runtime) {
+	if !g.f.Active() {
+		return
+	}
+	maxAddr, ok := g.getMax(r)
+	if !ok {
+		g.f.setStatus("地址解析失败")
+		return
+	}
+	var cur float32
+	if g.maxIsInt {
+		v, ok2 := r.Proc.ReadI32(maxAddr)
+		if !ok2 {
+			g.f.setStatus("读取上限失败")
+			return
+		}
+		cur = float32(v)
+	} else {
+		v, ok2 := r.Proc.ReadF32(maxAddr)
+		if !ok2 {
+			g.f.setStatus("读取上限失败")
+			return
+		}
+		cur = v
+	}
+	d := g.divisor
+	if d <= 0 {
+		d = 1
+	}
+	if cur >= g.target {
+		// 已达标: 若本次激活期间补过，显示补满结果（避免"明明补上了却只看到已达上限"）
+		if g.didWrite {
+			g.f.setStatus(fmt.Sprintf("已补满到 %g%s", g.target/d, g.unit))
+		} else {
+			g.f.setStatus(fmt.Sprintf("已达上限（%g%s）", cur/d, g.unit))
+		}
+		return
+	}
+	g.didWrite = true
+	if g.maxIsInt {
+		if !r.Proc.WriteI32(maxAddr, int32(g.target)) {
+			g.f.setStatus("写入上限失败")
+			return
+		}
+	} else {
+		if !r.Proc.WriteF32(maxAddr, g.target) {
+			g.f.setStatus("写入上限失败")
+			return
+		}
+	}
+	if addr, ok3 := g.getCur(r); ok3 {
+		r.Proc.WriteF32(addr, g.target)
+	}
+	g.f.setStatus(fmt.Sprintf("已补满到 %g%s", g.target/d, g.unit))
+}
+
+// ---------- 100% 探索 ----------
+
+// explore100 把所有已加载区域的完成度置为 1（即 100%）。
+//
+// GameWorld.RuntimeAreas 是 List<RuntimeGameWorldArea>，每个区域的
+// m_completionAmount（0..1）参与平均，得到 GameWorld.CompletionAmount，
+// 界面百分比 = round(x*100)。同时清掉 m_dirtyCompletionAmount，
+// 避免游戏立即重算把值覆盖回去；开启期间每周期维持。
+type explore100 struct {
+	f *Feature
+}
+
+func (g *explore100) Tick(r *Runtime) {
+	if !g.f.Active() {
+		return
+	}
+	gw := r.GameWorldAddr()
+	if gw == 0 {
+		g.f.setStatus("等待定位 GameWorld…")
+		return
+	}
+	list, ok := r.Proc.ReadU32(gw + OffGameWorldRuntimeAreas)
+	if !ok || !isHeapPtr(list) {
+		g.f.setStatus("地址解析失败")
+		return
+	}
+	items, ok := r.Proc.ReadU32(list + OffListItems)
+	size, ok2 := r.Proc.ReadI32(list + OffListSize)
+	if !ok || !ok2 || !isHeapPtr(items) || size <= 0 || size > 4096 {
+		g.f.setStatus("区域列表读取失败")
+		return
+	}
+	done := 0
+	for i := int32(0); i < size; i++ {
+		area, ok := r.Proc.ReadU32(items + uint32(i)*4)
+		if !ok || !isHeapPtr(area) {
+			continue
+		}
+		if r.Proc.WriteF32(area+OffAreaCompletion, 1.0) {
+			r.Proc.WriteU8(area+OffAreaCompletionDirty, 0)
+			done++
+		}
+	}
+	g.f.setStatus(fmt.Sprintf("已置 100%% 探索（%d/%d 区域）", done, size))
+}
+
+// ---------- 获得所有技能 ----------
+
+// grantAllAbilities 把所有能力开关置 1（已获得的跳过，幂等）。
+//
+// 关闭时不做任何事，再次开启仍会把缺的补上。
+//
+// 注意: 游戏是在「能力被正规授予」时才创建对应组件
+// （PlayerAbilities.SetAbility → Prefabs.EnsureRightPrefabsAreThereForAbilities）。
+// 这里只写标志位，因此少数能力（滑翔/冲刺/猛击等非默认实例化的）其组件
+// 可能要等存档重载或场景切换后才会实体化生效。
+type grantAllAbilities struct {
+	f        *Feature
+	sawWrite bool // 本次激活期间是否补授过
+}
+
+func (g *grantAllAbilities) Tick(r *Runtime) {
+	if !g.f.Active() {
+		return
+	}
+	sein, _, _, _, _, _ := r.Addrs()
+	if sein == 0 {
+		g.f.setStatus("地址解析失败")
+		return
+	}
+	pa, ok := r.Proc.ReadU32(sein + OffSeinPlayerAbil)
+	if !ok || !isHeapPtr(pa) {
+		g.f.setStatus("地址解析失败")
+		return
+	}
+	granted, total := 0, 0
+	for _, off := range PlayerAbilityOffsets {
+		obj, ok := r.Proc.ReadU32(pa + off)
+		if !ok || !isHeapPtr(obj) {
+			continue
+		}
+		total++
+		a := obj + OffAbilityHasAbility
+		v, ok := r.Proc.ReadU8(a)
+		if !ok {
+			continue
+		}
+		if v == 0 && r.Proc.WriteU8(a, 1) {
+			granted++
+		}
+	}
+	switch {
+	case total == 0:
+		g.f.setStatus("地址解析失败")
+	case granted > 0:
+		g.sawWrite = true
+		g.f.setStatus(fmt.Sprintf("已补授 %d 项技能（共 %d 项）", granted, total))
+	case g.sawWrite:
+		g.f.setStatus(fmt.Sprintf("本轮已补授完毕（共 %d 项）", total))
+	default:
+		g.f.setStatus(fmt.Sprintf("全部 %d 项技能均已获得", total))
+	}
+}
+
 // ---------- 无限二段跳 ----------
 
 // infiniteDoubleJump 无限二段跳。
@@ -911,6 +1087,26 @@ func BuildFeatures() []*Feature {
 		allTickers = append(allTickers, &setIntMin{f: f, get: get, target: target})
 		return f
 	}
+	// 满生命球 / 满能量球（见 refillTo 说明）
+	newRefillTo := func(digit int, name string, getMax, getCur func(*Runtime) (uint32, bool),
+		maxIsInt bool, target, divisor float32) *Feature {
+		f := NewFeature(digit, name)
+		allTickers = append(allTickers, &refillTo{
+			f: f, getMax: getMax, getCur: getCur,
+			maxIsInt: maxIsInt, target: target, divisor: divisor, unit: " 球",
+		})
+		return f
+	}
+	newGrantAll := func(digit int) *Feature {
+		f := NewFeature(digit, "获得所有技能")
+		allTickers = append(allTickers, &grantAllAbilities{f: f})
+		return f
+	}
+	newExplore100 := func(digit int) *Feature {
+		f := NewFeature(digit, "100% 探索")
+		allTickers = append(allTickers, &explore100{f: f})
+		return f
+	}
 	// 不安全区域也可建立灵魂链接
 	newSoulFlameAnywhere := func(digit int) *Feature {
 		f := NewFeature(digit, "可在不安全区域建立灵魂链接")
@@ -928,18 +1124,24 @@ func BuildFeatures() []*Feature {
 	// 溢出部分再用 Ctrl+小键盘。一命保护占用 Ctrl+小键盘 1（见 oneLife 单例）。
 
 	return []*Feature{
-		// ===== 小键盘 1-7（顺序编号，无空位）=====
+		// ===== 小键盘 1-9/0（顺序编号，无空位）=====
 		newRefill(1, "无限生命", hp, hpMax, true, HealthPointsPerCell, " 球"),
 		newRefill(2, "无限能量", en, enMax, false, 1, ""),
-		newZeroFloat(3, "灵魂链接无需冷却", soulCd),
-		newSoulFlameAnywhere(4), // 可在不安全区域建立灵魂链接
-		newSuperJump(5, 2.5),
-		newInfiniteDoubleJump(6),
-		newIntMin(7, "无限能力点数", lvlSP, 999),
-		// ===== Ctrl+小键盘（Ctrl+1 为一命保护，见 oneLife）=====
-		newCtrlCounterLock(2, "死亡数归零", deaths, 0),
+		newRefillTo(3, "满生命球", hpMax, hp, true, MaxHealthCells*HealthPointsPerCell, HealthPointsPerCell),
+		newRefillTo(4, "满能量球", enMax, en, false, MaxEnergyCells, 1),
+		newGrantAll(5),
+		newExplore100(6),
+		// 小键盘 7 空位（原"重置时间"：载体 GameTimer 挂在不可定位的
+		// GameController 上，暂无法实现，详见 README）
+		newZeroFloat(8, "灵魂链接无需冷却", soulCd),
+		newSoulFlameAnywhere(9),
+		newSuperJump(0, 2.5),
+		// ===== Ctrl+小键盘（顺序接续）=====
+		newInfiniteDoubleJump(1),
+		newIntMin(2, "无限能力点数", lvlSP, 999),
+		newCtrlCounterLock(4, "死亡数归零", deaths, 0),
 	}
 }
 
-// CtrlOneLifeDigit 一命保护的键位（Ctrl+小键盘 1）。
-const CtrlOneLifeDigit = 1
+// CtrlOneLifeDigit 一命保护的键位（Ctrl+小键盘 3）。
+const CtrlOneLifeDigit = 3

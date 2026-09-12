@@ -159,6 +159,8 @@ func main() {
 		cmdConIn()
 	case "diffname":
 		cmdDiffName(p)
+	case "heapfind":
+		cmdHeapFind(p)
 	case "strref":
 		cmdStrRef(p)
 	case "fields2":
@@ -2106,6 +2108,56 @@ func parseHex(s string) uint64 {
 	s = strings.TrimPrefix(strings.TrimPrefix(s, "0x"), "0X")
 	n, _ := strconv.ParseUint(s, 16, 64)
 	return n
+}
+
+// cmdHeapFind 在堆区按类名枚举实例（不限 DifficultyController）。
+//
+//	probe heapfind <ClassName> [dumpWords]
+//
+// 用于确认某个单例对象是否真的存在于内存，以及它的字段现值。
+func cmdHeapFind(p *core.Process) {
+	if len(os.Args) < 3 {
+		fmt.Println("usage: probe heapfind <ClassName> [dumpWords]")
+		return
+	}
+	target := os.Args[2]
+	words := 8
+	if len(os.Args) >= 4 {
+		if n, err := strconv.Atoi(os.Args[3]); err == nil {
+			words = n
+		}
+	}
+	t0 := time.Now()
+	n := 0
+	for _, r := range normRegions(p.Handle) {
+		if r.Base < 0x40000000 {
+			continue
+		}
+		const chunk = 8 << 20
+		for base := r.Base; base < r.Base+r.Size; base += chunk {
+			sz := uint64(chunk)
+			if r.Base+r.Size-base < sz {
+				sz = r.Base + r.Size - base
+			}
+			buf := make([]byte, sz)
+			if !p.ReadBytes(uint32(base), buf) {
+				continue
+			}
+			for off := 0; off+4 <= int(sz); off += 4 {
+				obj := uint32(base) + uint32(off)
+				if nm, _, ok := classOf(p, obj); !ok || nm != target {
+					continue
+				}
+				n++
+				fmt.Printf("  obj=0x%08X monitor=0x%08X :", obj, u32atb(buf, off+4))
+				for w := 1; w <= words && off+(w+1)*4 <= int(sz); w++ {
+					fmt.Printf(" [%02X]=0x%08X", (w+1)*4, u32atb(buf, off+(w+1)*4))
+				}
+				fmt.Println()
+			}
+		}
+	}
+	fmt.Printf("heapfind %q -> %d 个实例 [%.1fs]\n", target, n, time.Since(t0).Seconds())
 }
 
 // cmdDiffName 无过滤地列出所有"类名 == DifficultyController"的堆对象，

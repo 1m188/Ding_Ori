@@ -113,6 +113,76 @@ const (
 	OffAbilityHasAbility                = 0x08 // CharacterAbility.HasAbility (bool, 1 字节)
 )
 
+// PlayerAbilityOffsets PlayerAbilities 中全部能力字段的偏移（mono 元数据核验，
+// 连续 0x14..0xB0，共 40 项；首个字段 +0x14 是因为基类占用了 0x00-0x13）。
+//
+// 用途: "获得所有技能"逐个把各 CharacterAbility.HasAbility 置 1。
+// 列表末尾 4 项为地图标记（MapMarkers/HealthMarkers/EnergyMarkers/AbilityMarkers），
+// 属于"地图图标显示"而非技能，会直接揭示地图内容，故**默认跳过**，
+// 避免改动地图探索状态。
+var PlayerAbilityOffsets = []uint32{
+	0x14, // Bash
+	0x18, // ChargeFlame
+	0x1C, // WallJump
+	0x20, // Stomp
+	0x24, // DoubleJump
+	0x28, // ChargeJump
+	0x2C, // Magnet
+	0x30, // UltraMagnet
+	0x34, // Climb
+	0x38, // Glide
+	0x3C, // SpiritFlame
+	0x40, // RapidFire
+	0x44, // SoulEfficiency
+	0x48, // WaterBreath
+	0x4C, // ChargeFlameBlast
+	0x50, // ChargeFlameBurn
+	0x54, // DoubleJumpUpgrade
+	0x58, // BashBuff
+	0x5C, // UltraDefense
+	0x60, // HealthEfficiency
+	0x64, // Sense
+	0x68, // StompUpgrade
+	0x6C, // QuickFlame
+	// 0x70/0x78/0x7C/0x80 = 地图标记，见上说明，跳过
+	0x74, // EnergyEfficiency
+	0x84, // Rekindle
+	0x88, // Regroup
+	0x8C, // ChargeFlameEfficiency
+	0x90, // UltraSoulFlame
+	0x94, // SoulFlameEfficiency
+	0x98, // SplitFlameUpgrade
+	0x9C, // SparkFlame
+	0xA0, // CinderFlame
+	0xA4, // UltraSplitFlame
+	0xA8, // Grenade
+	0xAC, // Dash
+	0xB0, // GrenadeUpgrade
+}
+
+// GameWorld 字段偏移（探索度所在；GameWorld.Instance 可定位）。
+//
+//	GameWorld.RuntimeAreas(+0x18) -> List<RuntimeGameWorldArea>
+//	每个 RuntimeGameWorldArea 的 m_completionAmount 即该区域完成度（0..1），
+//	GameWorld.CompletionAmount 是各区域的平均值，CompletionPercentage = round(x*100)。
+const (
+	OffGameWorldRuntimeAreas = 0x18
+	OffAreaCompletion        = 0x14 // RuntimeGameWorldArea.m_completionAmount (float, 0..1)
+	OffAreaCompletionDirty   = 0x18 // RuntimeGameWorldArea.m_dirtyCompletionAmount (bool)
+	// List<T> 布局（.NET）: +0x08 _items, +0x0C _size
+	OffListItems = 0x08
+	OffListSize  = 0x0C
+)
+
+// 生命/能量球上限（游戏满级）。
+//
+// 生命: 内部以"点"存储，1 球 = 4 点，满级 12 球 → 48 点。
+// 能量: SeinEnergy.Max 直接以球数计，满级 15。
+const (
+	MaxHealthCells = 12
+	MaxEnergyCells = 15
+)
+
 // 生命值单位换算。
 //
 // SeinHealthController.HealthUpgradesCollected => MaxHealth/4 - 3，
