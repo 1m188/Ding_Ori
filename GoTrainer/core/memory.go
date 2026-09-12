@@ -23,26 +23,26 @@ var (
 )
 
 const (
-	procVMRead         = 0x0010
-	procVMWrite        = 0x0020
-	procVMOperation    = 0x0008
-	procQueryInfo      = 0x0400
-	procAccess         = procVMRead | procVMWrite | procVMOperation | procQueryInfo
-	memCommit          = 0x1000
-	memPrivate         = 0x40000
-	pageReadonly       = 0x02
-	pageReadWrite      = 0x04
-	pageWriteCopy      = 0x08
-	pageNoAccess       = 0x01
-	pageGuard          = 0x100
+	procVMRead      = 0x0010
+	procVMWrite     = 0x0020
+	procVMOperation = 0x0008
+	procQueryInfo   = 0x0400
+	procAccess      = procVMRead | procVMWrite | procVMOperation | procQueryInfo
+	memCommit       = 0x1000
+	memPrivate      = 0x40000
+	pageReadonly    = 0x02
+	pageReadWrite   = 0x04
+	pageWriteCopy   = 0x08
+	pageNoAccess    = 0x01
+	pageGuard       = 0x100
 )
 
 // Process 已打开的目标进程句柄。
 type Process struct {
-	Handle    uintptr
-	Pid       uint32
-	Name      string
-	closed    bool
+	Handle uintptr
+	Pid    uint32
+	Name   string
+	closed bool
 }
 
 // Attach 按进程名附加（取第一个匹配）。

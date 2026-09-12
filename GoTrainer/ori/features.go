@@ -357,10 +357,10 @@ func (g *soulFlameAnywhere) Tick(r *Runtime) {
 }
 
 type OneLifeProtect struct {
-	active  atomic.Bool
-	locked  atomic.Bool   // 是否已成功锁定
-	status  atomic.Value  // string
-	lastLo  atomic.Int32  // 最近读到的 LowestDifficulty（校验用）
+	active atomic.Bool
+	locked atomic.Bool  // 是否已成功锁定
+	status atomic.Value // string
+	lastLo atomic.Int32 // 最近读到的 LowestDifficulty（校验用）
 }
 
 // NewOneLifeProtect 创建一命保护。

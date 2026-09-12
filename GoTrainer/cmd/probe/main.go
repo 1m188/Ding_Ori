@@ -2,13 +2,14 @@
 // 活体游戏进程定位字段地址。仅用于本机授权调试。
 //
 // 用法:
-//   probe info                  进程/位数/模块基址/可读内存统计
-//   probe regions               列出归一化后的可读内存区域
-//   probe read  0xADDR 64       十六进制转储
-//   probe write 0xADDR i32 999  写值
-//   probe scan  i32 16          精确值扫描（保存候选到 .probe_state.json）
-//   probe next  i32 8           在上次候选里按新值过滤
-//   probe list                  列出候选及当前值
+//
+//	probe info                  进程/位数/模块基址/可读内存统计
+//	probe regions               列出归一化后的可读内存区域
+//	probe read  0xADDR 64       十六进制转储
+//	probe write 0xADDR i32 999  写值
+//	probe scan  i32 16          精确值扫描（保存候选到 .probe_state.json）
+//	probe next  i32 8           在上次候选里按新值过滤
+//	probe list                  列出候选及当前值
 package main
 
 import (
@@ -40,9 +41,9 @@ var (
 )
 
 const (
-	memCommit  = 0x1000
-	listAll    = 0x03
-	stateFile  = ".probe_state.json"
+	memCommit = 0x1000
+	listAll   = 0x03
+	stateFile = ".probe_state.json"
 )
 
 type mbi struct {
@@ -814,7 +815,9 @@ func readCStr(p *core.Process, addr uint32) string {
 }
 
 // cmdFindObj 查找"某对象字段等于指定值"的对象:
-//   probe findobj <value> <fieldOff> [dumpOff]
+//
+//	probe findobj <value> <fieldOff> [dumpOff]
+//
 // 即: 找到所有 addr 满足 u32(addr)==value, 报告对象 addr-fieldOff。
 func cmdFindObj(p *core.Process) {
 	if len(os.Args) < 4 {
@@ -906,7 +909,8 @@ func u32atb(buf []byte, off int) uint32 {
 }
 
 // cmdKlass 解析 vtable -> MonoClass -> 类型名。
-//   probe klass 0xVTABLE
+//
+//	probe klass 0xVTABLE
 func cmdKlass(p *core.Process) {
 	if len(os.Args) < 3 {
 		fmt.Println("usage: probe klass 0xVTABLE")
@@ -932,7 +936,8 @@ func cmdKlass(p *core.Process) {
 }
 
 // cmdClass 按类型名定位 MonoClass / vtable / 全部实例。
-//   probe class <TypeName>
+//
+//	probe class <TypeName>
 func cmdClass(p *core.Process) {
 	if len(os.Args) < 3 {
 		fmt.Println("usage: probe class <TypeName>")
@@ -1543,6 +1548,7 @@ func cmdOffs(p *core.Process) {
 }
 
 // cmdRefs 查找堆区中所有指向指定地址的槽位（用于反查静态引用）。
+//
 //	probe refs 0xADDR [maxShow]
 func cmdRefs(p *core.Process) {
 	if len(os.Args) < 3 {

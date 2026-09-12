@@ -59,7 +59,7 @@ type Runtime struct {
 	diffSlot       uint32
 
 	// 定位诊断
-	LastScanError string   // 失败原因（UI 显示）
+	LastScanError string // 失败原因（UI 显示）
 	LastSeinFind  time.Time
 	seinAnchor    uint32 // 上次命中的静态引用槽位（加速复用）
 	auxBusy       bool

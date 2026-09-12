@@ -27,8 +27,9 @@
 //     区域枚举须使用 64 位视图（见 core.ReadableRegions）。
 //
 // 数值验证记录:
-//   原版: 死亡333 / GameTime 10939s≈存档05:11 / SP=1 / Exp=1187 / 能量0.5/5.0
-//   DE:   SP=13 / Exp=405 / 能量1.0/2.0 / 血16/16 / 死亡98
+//
+//	原版: 死亡333 / GameTime 10939s≈存档05:11 / SP=1 / Exp=1187 / 能量0.5/5.0
+//	DE:   SP=13 / Exp=405 / 能量1.0/2.0 / 血16/16 / 死亡98
 package ori
 
 // 版本定义。
@@ -88,10 +89,10 @@ const (
 	OffDiffDelegate   = 0x20
 
 	// ---- SeinCharacter 子对象引用（用于定位新功能的载体对象）----
-	OffSeinSoulFlame    = 0x28 // SeinCharacter +0x28 -> SeinSoulFlame
-	OffSeinPlatformBeh  = 0x48 // SeinCharacter +0x48 -> PlatformBehaviour
-	OffSeinInput        = 0x34 // SeinCharacter +0x34 -> SeinInput
-	OffSeinPlayerAbil   = 0x4C // SeinCharacter +0x4C -> PlayerAbilities
+	OffSeinSoulFlame   = 0x28 // SeinCharacter +0x28 -> SeinSoulFlame
+	OffSeinPlatformBeh = 0x48 // SeinCharacter +0x48 -> PlatformBehaviour
+	OffSeinInput       = 0x34 // SeinCharacter +0x34 -> SeinInput
+	OffSeinPlayerAbil  = 0x4C // SeinCharacter +0x4C -> PlayerAbilities
 )
 
 // SeinSoulFlame 字段偏移（灵魂链接: 冷却/安全区域）。
@@ -127,10 +128,10 @@ const (
 
 // SeinDoubleJump 字段偏移（多段跳）。
 const (
-	OffDoubleJumpStrength    = 0x38 // JumpStrength (float)
-	OffDoubleJumpCount       = 0x40 // m_numberOfJumpsAvailable (int) —— 剩余跳跃次数
-	OffDoubleJumpTime        = 0x3C // m_doubleJumpTime (float)
-	OffDoubleJumpRemainLock  = 0x44 // m_remainingLockTime (float)
+	OffDoubleJumpStrength   = 0x38 // JumpStrength (float)
+	OffDoubleJumpCount      = 0x40 // m_numberOfJumpsAvailable (int) —— 剩余跳跃次数
+	OffDoubleJumpTime       = 0x3C // m_doubleJumpTime (float)
+	OffDoubleJumpRemainLock = 0x44 // m_remainingLockTime (float)
 )
 
 // PlatformMovement 字段偏移（移动速度）。
