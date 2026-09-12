@@ -89,9 +89,35 @@ func (e *keyEdges) pressed(vk int) bool {
 
 type session struct {
 	prof  ori.Profile
-	proc  *core.Process
 	r     *ori.Runtime
 	feats []*ori.Feature
+
+	// procMu 保护 proc: 看护协程与主循环（F12/ESC/END）都会改写它。
+	procMu sync.Mutex
+	proc   *core.Process
+}
+
+func (s *session) getProc() *core.Process {
+	s.procMu.Lock()
+	defer s.procMu.Unlock()
+	return s.proc
+}
+
+func (s *session) setProc(p *core.Process) {
+	s.procMu.Lock()
+	s.proc = p
+	s.procMu.Unlock()
+}
+
+// closeProc 关闭并清空当前进程句柄（可安全重复调用）。
+func (s *session) closeProc() {
+	s.procMu.Lock()
+	p := s.proc
+	s.proc = nil
+	s.procMu.Unlock()
+	if p != nil {
+		p.Close()
+	}
 }
 
 type app struct {
@@ -210,7 +236,7 @@ func (a *app) choose(prof ori.Profile) {
 	a.sess = s
 	a.chosen = true
 	if p, err := core.Attach(prof.ProcessName); err == nil {
-		s.proc = p
+		s.setProc(p)
 		s.r.SetProcess(p)
 		a.msg.Store(fmt.Sprintf("已附加 %s (PID %d)。", prof.ProcessName, p.Pid))
 	} else {
@@ -342,6 +368,13 @@ func statusColor(status string, active bool) string {
 // ---------- 会话协程 ----------
 
 func (a *app) sessionWatch(s *session) {
+	// 看护协程是长期运行的后台任务: 任何未捕获 panic 都会让整个进程退出。
+	// 这里兜底恢复并提示，避免"修改器无故消失"。
+	defer func() {
+		if rec := recover(); rec != nil {
+			a.setMsg(fmt.Sprintf("内部错误（看护协程已恢复）: %v", rec))
+		}
+	}()
 	for {
 		a.mu.Lock()
 		stillCurrent := a.sess == s
@@ -349,16 +382,11 @@ func (a *app) sessionWatch(s *session) {
 		if !stillCurrent {
 			return
 		}
-		if s.proc == nil || !s.proc.Alive() {
-			if s.proc != nil {
-				s.proc.Close()
-				s.proc = nil
-				s.r.SetProcess(nil)
-			}
+		if s.getProc() == nil || !s.getProc().Alive() {
+			s.closeProc()
+			s.r.SetProcess(nil)
 			if p, err := core.Attach(s.prof.ProcessName); err == nil {
-				a.mu.Lock()
-				s.proc = p
-				a.mu.Unlock()
+				s.setProc(p)
 				s.r.SetProcess(p)
 				a.setMsg(fmt.Sprintf("已附加 %s (PID %d)。", s.prof.ProcessName, p.Pid))
 				time.Sleep(time.Second)
@@ -376,6 +404,11 @@ func (a *app) sessionWatch(s *session) {
 }
 
 func (a *app) engineLoop(s *session) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			a.setMsg(fmt.Sprintf("内部错误（功能引擎已恢复）: %v", rec))
+		}
+	}()
 	for {
 		a.mu.Lock()
 		stillCurrent := a.sess == s
@@ -383,7 +416,7 @@ func (a *app) engineLoop(s *session) {
 		if !stillCurrent {
 			return
 		}
-		if s.proc != nil && s.proc.Alive() {
+		if p := s.getProc(); p != nil && p.Alive() {
 			ori.TickAll(s.r)
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -413,22 +446,31 @@ func main() {
 
 	for {
 		if !a.chosen {
-			if keys.pressed(vkUp) || keys.pressed(vkW) {
-				a.selCursor = (a.selCursor + 1) % 2
-			}
-			if keys.pressed(vkDown) || keys.pressed(vkS) {
-				a.selCursor = (a.selCursor + 1) % 2
-			}
-			if keys.pressed(vkReturn) {
-				prof := ori.Profiles[ori.Vanilla]
-				if a.selCursor == 1 {
-					prof = ori.Profiles[ori.Definitive]
+			// 选择界面的按键同样只在修改器窗口前台时响应，
+			// 否则在游戏里按回车/ESC 会误触发。
+			fgSel := core.WindowIsForeground()
+			selUp := keys.pressed(vkUp) || keys.pressed(vkW)
+			selDown := keys.pressed(vkDown) || keys.pressed(vkS)
+			selRet := keys.pressed(vkReturn)
+			selEsc := keys.pressed(vkEscape)
+			if fgSel {
+				if selUp {
+					a.selCursor = (a.selCursor + 1) % 2
 				}
-				a.choose(prof)
-			}
-			if keys.pressed(vkEscape) {
-				fmt.Println("\n退出。")
-				os.Exit(0)
+				if selDown {
+					a.selCursor = (a.selCursor + 1) % 2
+				}
+				if selRet {
+					prof := ori.Profiles[ori.Vanilla]
+					if a.selCursor == 1 {
+						prof = ori.Profiles[ori.Definitive]
+					}
+					a.choose(prof)
+				}
+				if selEsc {
+					fmt.Println("\n退出。")
+					os.Exit(0)
+				}
 			}
 			renderSelector(a)
 			time.Sleep(80 * time.Millisecond)
@@ -441,22 +483,31 @@ func main() {
 			continue
 		}
 
-		if keys.pressed(vkF1) {
+		// 窗口前台状态：所有界面/破坏性按键（ESC/END/F1/HOME/导航）
+		// 只在修改器自己的窗口处于前台时生效。否则在游戏里按 ESC
+		// （打开暂停菜单）会被误当成"返回版本选择"，再按一次直接退出程序。
+		fg := core.WindowIsForeground()
+
+		// 注意: 先统一采样按键边沿，再按前台状态决定是否响应，
+		// 保证 prev 状态每轮都更新，避免切回窗口时误触发。
+		f1Pressed := keys.pressed(vkF1)
+		endPressed := keys.pressed(vkEnd)
+		escPressed := keys.pressed(vkEscape)
+		homePressed := keys.pressed(vkHome)
+		f12Pressed := keys.pressed(vkF12)
+
+		if fg && f1Pressed {
 			a.help.Store(!a.help.Load())
 		}
-		if keys.pressed(vkEnd) {
+		if fg && endPressed {
 			ori.DeactivateAll(s.feats, s.r)
-			if s.proc != nil {
-				s.proc.Close()
-			}
+			s.closeProc()
 			fmt.Println("\nOriTrainer 已退出。")
 			os.Exit(0)
 		}
-		if keys.pressed(vkEscape) {
+		if fg && escPressed {
 			ori.DeactivateAll(s.feats, s.r)
-			if s.proc != nil {
-				s.proc.Close()
-			}
+			s.closeProc()
 			a.mu.Lock()
 			a.sess = nil
 			a.chosen = false
@@ -465,18 +516,13 @@ func main() {
 			time.Sleep(200 * time.Millisecond)
 			continue
 		}
-		if keys.pressed(vkHome) {
+		if fg && homePressed {
 			ori.DeactivateAll(s.feats, s.r)
 			a.setMsg("已关闭全部功能")
 		}
-		if keys.pressed(vkF12) {
-			a.mu.Lock()
-			if s.proc != nil {
-				s.proc.Close()
-				s.proc = nil
-			}
+		if f12Pressed {
+			s.closeProc()
 			s.r.SetProcess(nil)
-			a.mu.Unlock()
 			a.setMsg("已重置，重新附加中…")
 		}
 		// ---- 全局热键：仅小键盘数字键（可配 Ctrl）----

@@ -28,11 +28,15 @@ package ori
 import (
 	"fmt"
 	"math"
+	"os"
 	"sync"
 	"time"
 
 	"oritrainer/core"
 )
+
+// debugAux 为真时输出辅助定位诊断（设置环境变量 ORITRAINER_DEBUG=1）。
+var debugAux = os.Getenv("ORITRAINER_DEBUG") != ""
 
 // Runtime 保存一次会话内的解析结果与缓存。
 type Runtime struct {
@@ -51,6 +55,8 @@ type Runtime struct {
 	// --- 独立单例（后台异步定位，可重试）---
 	DeathCounter   uint32 // SeinDeathCounter.Instance
 	DiffController uint32 // DifficultyController.Instance
+	deathSlot      uint32 // 上述单例的静态槽地址（重读用）
+	diffSlot       uint32
 
 	// 定位诊断
 	LastScanError string   // 失败原因（UI 显示）
@@ -81,6 +87,8 @@ func (r *Runtime) SetProcess(p *core.Process) {
 	r.DoubleJump = 0
 	r.DeathCounter = 0
 	r.DiffController = 0
+	r.deathSlot = 0
+	r.diffSlot = 0
 	r.LastScanError = ""
 	r.auxBusy = false
 	r.auxTried = time.Time{}
@@ -165,10 +173,36 @@ func f32at(buf []byte, off int) float32 {
 	return math.Float32frombits(u32at(buf, off))
 }
 
-// isHeapPtr 判断是否可能是 32 位 mono 堆对象指针。
-// 实测堆对象落在 0x4xxxxxxx-0x5xxxxxxx，静态/元数据在低区与 0x2A-0x2B 段。
+// ---------- 地址空间常量 ----------
+
+// 关键教训（2026-09 实机）: 本进程是 32 位、带 /LARGEADDRESSAWARE 的 Unity mono
+// 游戏，托管堆横跨 0x50xxxxxx-0x7Bxxxxxx（角色重生后会落到 0x73xxxxxx 这类
+// 高地址）。早期实现把"堆指针"上限写成 0x70000000，导致玩家对象一旦分配到
+// 高位就永远扫描不到——表现为"一开始能用，死亡重生后彻底失效"。
+//
+// 因此上界必须覆盖完整 32 位用户空间。
+const (
+	maxUserAddr = 0xFFFF0000 // 32 位用户空间上限（保守留出保留区）
+	minObjAddr  = 0x40000000 // 托管堆对象下界（低区为代码/JIT/元数据）
+)
+
+// isHeapPtr 判断是否可能是 32 位托管堆对象指针。
 func isHeapPtr(v uint32) bool {
-	return v >= 0x40000000 && v < 0x70000000 && v&3 == 0
+	return v >= minObjAddr && v < maxUserAddr && v&3 == 0
+}
+
+// isPtr 判断是否可能是任意用户空间指针（vtable/klass 等，要求 4 字节对齐）。
+func isPtr(v uint32) bool {
+	return v >= 0x00010000 && v < maxUserAddr && v&3 == 0
+}
+
+// isTextPtr 判断是否可能是字符串地址。
+//
+// 不要求 4 字节对齐: mono 的名字符串在元数据区是紧凑拼接的，起始地址
+// 往往不是 4 的倍数（实测 SeinDeathCounter 的名字在 0x2AFB8F4D）。若对
+// 字符串指针做对齐校验，会导致所有类名解析静默失败。
+func isTextPtr(v uint32) bool {
+	return v >= 0x00010000 && v < maxUserAddr
 }
 
 // classOf 解析对象地址 -> (类型名, klass)。
@@ -190,11 +224,11 @@ func (r *Runtime) classOf(p *core.Process, obj uint32) (string, uint32, bool) {
 		return "", 0, false
 	}
 	vt, ok := p.ReadU32(obj)
-	if !ok || vt < 0x08000000 || vt >= 0x70000000 || vt&3 != 0 {
+	if !ok || !isPtr(vt) {
 		return "", 0, false
 	}
 	k, ok := p.ReadU32(vt)
-	if !ok || k < 0x08000000 || k >= 0x70000000 || k == vt {
+	if !ok || !isPtr(k) || k == vt {
 		return "", 0, false
 	}
 	// klass 自指校验（mono MonoClass 固有签名）
@@ -202,7 +236,7 @@ func (r *Runtime) classOf(p *core.Process, obj uint32) (string, uint32, bool) {
 		return "", 0, false
 	}
 	np, ok := p.ReadU32(k + 0x30)
-	if !ok || np < 0x08000000 {
+	if !ok || !isTextPtr(np) {
 		return "", 0, false
 	}
 	s := readIdent(p, np)
@@ -213,27 +247,33 @@ func (r *Runtime) classOf(p *core.Process, obj uint32) (string, uint32, bool) {
 }
 
 // readIdent 读取以 NUL 结尾且形如标识符的 ASCII 字符串（非标识符返回空）。
+//
+// 采用 4 字节步进读取并在遇到 NUL 时立即停止。不能一次性读固定 96 字节：
+// 类名字符串常位于映射区末尾，越界读取会让整次 RPM 失败，从而解析不出
+// 任何类名（实测导致 SeinDeathCounter 等单例定位失败）。
 func readIdent(p *core.Process, addr uint32) string {
-	buf := make([]byte, 96)
-	if !p.ReadBytes(addr, buf) {
-		return ""
-	}
-	n := 0
-	for ; n < len(buf); n++ {
-		c := buf[n]
-		if c == 0 {
-			break
+	var out []byte
+	var b [4]byte
+	for i := 0; i < 24; i++ { // 上限 96 字节
+		if !p.ReadBytes(addr+uint32(i*4), b[:]) {
+			return "" // 读取中断且未见 NUL → 视为无效
 		}
-		ok := c == '_' || c == '.' || c == '<' || c == '>' || c == '`' ||
-			(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (n > 0 && c >= '0' && c <= '9')
-		if !ok {
-			return ""
+		for _, c := range b {
+			if c == 0 {
+				if len(out) == 0 {
+					return ""
+				}
+				return string(out)
+			}
+			ok := c == '_' || c == '.' || c == '<' || c == '>' || c == '`' ||
+				(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (len(out) > 0 && c >= '0' && c <= '9')
+			if !ok {
+				return ""
+			}
+			out = append(out, c)
 		}
 	}
-	if n == 0 || n >= len(buf) {
-		return ""
-	}
-	return string(buf[:n])
+	return "" // 超过上限未见 NUL
 }
 
 // ---------- 活体 Sein 定位 ----------
@@ -244,7 +284,7 @@ func validateSein(p *core.Process, v uint32) bool {
 		return false
 	}
 	vt, ok := p.ReadU32(v)
-	if !ok || vt < 0x08000000 || vt >= 0x70000000 {
+	if !ok || !isPtr(vt) {
 		return false
 	}
 	lvl, ok1 := p.ReadU32(v + OffSeinLevel)
@@ -278,74 +318,109 @@ func validateSein(p *core.Process, v uint32) bool {
 
 // locateSein 定位活体 SeinCharacter。
 //
-// 首选: 低区（mono 静态数据带）中 [P, …, P] 相邻双引用模式 ——
-// 对应 Characters.Sein 与 Characters.Current 两个静态字段；再做
-// 结构校验与类名校验。
-// 回退: 静态锚点（版本相关，作为快路径）。
+// 两级策略:
+//  1. 复用已缓存的"静态锚点槽"（游戏 Characters.Sein / Characters.Current
+//     两个静态字段所在的相邻槽位），直接重读该槽 —— 毫秒级，且角色重生
+//     后槽内容会指向新对象，自动跟上；
+//  2. 锚点未知或失效时，在低地址区按 "[P, …, P]" 相邻双引用模式重新发现
+//     锚点槽（低区扫描约 1 秒）；仍失败则全地址空间兜底。
 func (r *Runtime) locateSein(p *core.Process) uint32 {
-	// 快路径: 已知锚点仍有效则直接复用
-	if a := r.seinAnchor; a != 0 {
-		if v, ok := p.ReadU32(a); ok && validateSein(p, v) {
-			if nm, _, ok2 := r.classOf(p, v); ok2 && nm == "SeinCharacter" {
-				return v
-			}
-		}
+	// ① 锚点槽重读
+	if v := r.seinFromAnchor(p); v != 0 {
+		return v
 	}
+	// ② 低区模式扫描（mono 静态/分配区集中在低地址）
+	if v, slot := r.scanSeinPattern(p, 0x10000000); v != 0 {
+		r.seinAnchor = slot
+		return v
+	}
+	// ③ 全地址空间兜底（慢，仅在极端情况触发）
+	if v, slot := r.scanSeinPattern(p, 0x100000000); v != 0 {
+		r.seinAnchor = slot
+		return v
+	}
+	r.seinAnchor = 0
+	return 0
+}
 
-	// 主路径: 低区相邻双引用扫描
-	type region struct {
-		base uint32
-		data []byte
+// seinFromAnchor 重读缓存的锚点槽，返回其中有效的活体 SeinCharacter。
+// 返回 0 表示锚点不可用，需要重新扫描。
+func (r *Runtime) seinFromAnchor(p *core.Process) uint32 {
+	a := r.seinAnchor
+	if a == 0 {
+		return 0
 	}
-	var bands []region
-	for _, reg := range p.ReadableRegions() {
-		if reg.Base >= 0x10000000 {
-			continue
-		}
-		buf := make([]byte, reg.Size)
-		if !p.ReadBytes(reg.Base, buf) {
-			continue
-		}
-		bands = append(bands, region{reg.Base, buf})
+	v, ok := p.ReadU32(a)
+	if !ok || !validateSein(p, v) {
+		return 0
 	}
-
-	seen := map[uint32]bool{}
-	var best uint32
-	for _, b := range bands {
-		for off := 0; off+16 <= len(b.data); off += 4 {
-			v := u32at(b.data, off)
-			if !isHeapPtr(v) {
-				continue
-			}
-			if u32at(b.data, off+12) != v || seen[v] {
-				continue
-			}
-			seen[v] = true
-			if !validateSein(p, v) {
-				continue
-			}
-			if nm, _, ok := r.classOf(p, v); ok && nm == "SeinCharacter" {
-				r.seinAnchor = b.base + uint32(off)
-				return v
-			}
-			if best == 0 && validateSein(p, v) {
-				best = v
-			}
-		}
+	// 优先信任"相邻双引用"仍在的槽（Characters.Sein + Current）
+	if v2, ok2 := p.ReadU32(a + 12); ok2 && v2 == v {
+		return v
 	}
-	if best != 0 {
-		r.seinAnchor = 0
-		return best
+	// Current 可能已切到别的角色，退化为类名校验
+	if nm, _, ok := r.classOf(p, v); ok && nm == "SeinCharacter" {
+		return v
 	}
 	return 0
+}
+
+// scanSeinPattern 在低于 limit 的可读区域里扫描 "[P, …, P]"（间隔 12 字节的
+// 同值堆指针）模式，返回 (对象地址, 槽位地址)。
+//
+// 采用 4MB 分块读取并保留 12 字节重叠，避免一次性分配整段区域
+// （旧实现 make([]byte, 区域大小) 在堆变大后可致进程 OOM 退出）。
+func (r *Runtime) scanSeinPattern(p *core.Process, limit uint64) (uint32, uint32) {
+	const chunk = 4 << 20
+	seen := map[uint32]bool{}
+	var bestAddr, bestSlot uint32
+	for _, reg := range p.ReadableRegions() {
+		if uint64(reg.Base) >= limit {
+			continue
+		}
+		buf := make([]byte, chunk+16)
+		for off := uint32(0); off < reg.Size; off += chunk {
+			n := reg.Size - off
+			if n > chunk {
+				n = chunk
+			}
+			if n < 16 {
+				break
+			}
+			b := buf[:n]
+			if !p.ReadBytes(reg.Base+off, b) {
+				continue
+			}
+			for i := 0; i+16 <= len(b); i += 4 {
+				v := u32at(b, i)
+				if !isHeapPtr(v) || seen[v] {
+					continue
+				}
+				if u32at(b, i+12) != v {
+					continue
+				}
+				seen[v] = true
+				if !validateSein(p, v) {
+					continue
+				}
+				slot := reg.Base + off + uint32(i)
+				if nm, _, ok := r.classOf(p, v); ok && nm == "SeinCharacter" {
+					return v, slot
+				}
+				if bestAddr == 0 {
+					bestAddr, bestSlot = v, slot
+				}
+			}
+		}
+	}
+	return bestAddr, bestSlot
 }
 
 // ---------- 对象链刷新 ----------
 
 // refreshChain 从活体 SeinCharacter 重新读取全部子对象地址。
-// 场景切换后子对象可能重建，因此每次刷新都重读指针。
-func (r *Runtime) refreshChain(p *core.Process) {
-	sein := r.SeinCharacter
+// 场景切换/重生后子对象会重建，因此每次刷新都重读指针。
+func (r *Runtime) refreshChain(p *core.Process, sein uint32) {
 	if sein == 0 || !validateSein(p, sein) {
 		return
 	}
@@ -376,48 +451,102 @@ func (r *Runtime) refreshChain(p *core.Process) {
 	r.mu.Unlock()
 }
 
-// Refresh 周期性维护：确保活体 Sein 已定位并刷新对象链。
-// 返回是否已就绪。
+// Refresh 周期性维护：以游戏静态字段（锚点槽）为准重读活体对象，
+// 再刷新对象链。返回是否已就绪。
+//
+// 重要: 每次都以锚点槽当前值为准，而不是长期信任缓存的对象指针。
+// 角色死亡重生时游戏会创建新的 SeinCharacter 并改写静态字段；旧对象
+// 内存仍然"看起来合法"（被 GC 回收前），若继续写它就会毫无效果。
 func (r *Runtime) Refresh() bool {
 	r.mu.Lock()
 	p := r.Proc
-	cur := r.SeinCharacter
 	r.mu.Unlock()
 	if p == nil || !p.Alive() {
 		return false
 	}
 
-	if cur != 0 && validateSein(p, cur) {
-		r.refreshChain(p)
-		r.mu.Lock()
-		n := r.SeinCharacter
-		r.mu.Unlock()
-		if n != 0 {
-			return true
-		}
-	}
-
-	// 需要重新定位
-	sein := r.locateSein(p)
-	r.mu.Lock()
-	r.SeinCharacter = sein
+	// ① 以锚点槽为准重读；失效则完整重新定位
+	sein := r.seinFromAnchor(p)
 	if sein == 0 {
+		sein = r.locateSein(p)
+	}
+	if sein == 0 {
+		r.mu.Lock()
+		r.SeinCharacter = 0
 		r.SeinLevel = 0
 		r.SoulFlame = 0
 		r.SeinJump = 0
 		r.DoubleJump = 0
 		r.LastScanError = "未找到活体玩家对象（请进入存档后按 F12 重试）"
-	} else {
-		r.LastScanError = ""
-		r.LastSeinFind = time.Now()
-	}
-	r.mu.Unlock()
-	if sein == 0 {
+		r.mu.Unlock()
 		return false
 	}
-	r.refreshChain(p)
-	r.resolveAux(p)
+
+	r.mu.Lock()
+	changed := r.SeinCharacter != sein
+	r.SeinCharacter = sein
+	if changed {
+		r.LastSeinFind = time.Now()
+	}
+	r.LastScanError = ""
+	r.mu.Unlock()
+
+	// ② 重读附属单例的静态槽（对象同样可能被重建/迁移到高地址）
+	r.refreshAuxSlots(p)
+
+	r.refreshChain(p, sein)
+	r.mu.Lock()
+	needAux := changed || r.DeathCounter == 0 || r.DiffController == 0
+	r.mu.Unlock()
+	if needAux {
+		r.resolveAux(p, sein)
+	}
 	return true
+}
+
+// refreshAuxSlots 以已缓存的静态槽为准重读死亡计数/难度控制器；
+// 槽失效时清空，交由 resolveAux 重新扫描。
+func (r *Runtime) refreshAuxSlots(p *core.Process) {
+	r.mu.Lock()
+	ds, dfs := r.deathSlot, r.diffSlot
+	r.mu.Unlock()
+
+	if ds != 0 {
+		if v := r.auxFromSlot(p, ds, "SeinDeathCounter"); v != 0 {
+			r.mu.Lock()
+			r.DeathCounter = v
+			r.mu.Unlock()
+		} else {
+			r.mu.Lock()
+			r.DeathCounter = 0
+			r.deathSlot = 0
+			r.mu.Unlock()
+		}
+	}
+	if dfs != 0 {
+		if v := r.auxFromSlot(p, dfs, "DifficultyController"); v != 0 {
+			r.mu.Lock()
+			r.DiffController = v
+			r.mu.Unlock()
+		} else {
+			r.mu.Lock()
+			r.DiffController = 0
+			r.diffSlot = 0
+			r.mu.Unlock()
+		}
+	}
+}
+
+// auxFromSlot 重读静态槽并确认其中对象仍属于期望类型。
+func (r *Runtime) auxFromSlot(p *core.Process, slot uint32, want string) uint32 {
+	v, ok := p.ReadU32(slot)
+	if !ok || !isHeapPtr(v) {
+		return 0
+	}
+	if nm, _, ok := r.classOf(p, v); !ok || nm != want {
+		return 0
+	}
+	return v
 }
 
 // ScanObjects 兼容旧调用点: 等价于 Refresh。
@@ -435,45 +564,51 @@ func (r *Runtime) ScanObjects() error {
 // 节流采用指数退避: 连续失败时重试间隔 3s→6s→12s→…→60s。
 // 这样主菜单等"对象尚未创建"的场景不会持续占用 CPU；一旦定位成功
 // 或被 F12 重置（SetProcess），退避计数清零。
-func (r *Runtime) resolveAux(p *core.Process) {
+func (r *Runtime) resolveAux(p *core.Process, sein uint32) {
 	r.mu.Lock()
-	if r.auxBusy || time.Since(r.auxTried) < r.auxBackoff() {
+	if r.auxBusy {
 		r.mu.Unlock()
 		return
 	}
 	needDeath := r.DeathCounter == 0
 	needDiff := r.DiffController == 0
-	sein := r.SeinCharacter
-	r.auxTried = time.Now()
-	r.auxBusy = true
-	if needDeath || needDiff {
-		r.auxFails++
-	}
-	r.mu.Unlock()
-
 	if !needDeath && !needDiff {
-		r.mu.Lock()
-		r.auxBusy = false
 		r.mu.Unlock()
 		return
 	}
+	if time.Since(r.auxTried) < r.auxBackoff() {
+		r.mu.Unlock()
+		return
+	}
+	r.auxTried = time.Now()
+	r.auxBusy = true
+	r.auxFails++
+	r.mu.Unlock()
 
 	go func() {
-		death, diff := scanLowBandAux(p, sein)
+		// panic 兜底: 后台扫描协程若崩溃会终止整个进程。
+		defer func() {
+			recover()
+			r.mu.Lock()
+			r.auxBusy = false
+			r.mu.Unlock()
+		}()
+		death, diff, dSlot, dfSlot := scanLowBandAux(p, sein)
 		r.mu.Lock()
 		gotAny := false
 		if needDeath && death != 0 {
 			r.DeathCounter = death
+			r.deathSlot = dSlot
 			gotAny = true
 		}
 		if needDiff && diff != 0 {
 			r.DiffController = diff
+			r.diffSlot = dfSlot
 			gotAny = true
 		}
 		if gotAny {
 			r.auxFails = 0
 		}
-		r.auxBusy = false
 		r.mu.Unlock()
 	}()
 }
@@ -495,30 +630,15 @@ func (r *Runtime) auxBackoff() time.Duration {
 //   - DifficultyController: 类名匹配 + Difficulty/Lowest ∈ [0,3]
 //
 // 多个候选时优先取引用活体 Sein 的那个（死亡计数）。
-func scanLowBandAux(p *core.Process, sein uint32) (death, diff uint32) {
-	type region struct {
-		base uint32
-		data []byte
-	}
-	var bands []region
-	for _, reg := range p.ReadableRegions() {
-		if reg.Base >= 0x10000000 {
-			continue
-		}
-		buf := make([]byte, reg.Size)
-		if !p.ReadBytes(reg.Base, buf) {
-			continue
-		}
-		bands = append(bands, region{reg.Base, buf})
-	}
-
+func scanLowBandAux(p *core.Process, sein uint32) (death, diff, deathSlot, diffSlot uint32) {
+	const chunk = 4 << 20
 	cache := map[uint32]string{}
 	classOfAt := func(obj uint32) string {
 		if !isHeapPtr(obj) {
 			return ""
 		}
 		vt, ok := p.ReadU32(obj)
-		if !ok || vt < 0x08000000 || vt >= 0x70000000 || vt&3 != 0 {
+		if !ok || !isPtr(vt) {
 			return ""
 		}
 		if nm, ok := cache[vt]; ok {
@@ -526,9 +646,9 @@ func scanLowBandAux(p *core.Process, sein uint32) (death, diff uint32) {
 		}
 		vk, ok := p.ReadU32(vt)
 		nm := ""
-		if ok && vk >= 0x08000000 && vk != vt {
+		if ok && isPtr(vk) && vk != vt {
 			if k0, ok3 := p.ReadU32(vk); ok3 && k0 == vk { // klass 自指
-				if np, ok2 := p.ReadU32(vk + 0x30); ok2 && np >= 0x08000000 {
+				if np, ok2 := p.ReadU32(vk + 0x30); ok2 && isTextPtr(np) {
 					nm = readIdent(p, np)
 				}
 			}
@@ -538,47 +658,65 @@ func scanLowBandAux(p *core.Process, sein uint32) (death, diff uint32) {
 	}
 
 	seen := map[uint32]bool{}
-	var deathRef, deathAny uint32
-	for _, b := range bands {
-		for off := 0; off+4 <= len(b.data); off += 4 {
-			v := u32at(b.data, off)
-			if !isHeapPtr(v) || seen[v] {
-				continue
+	var deathRef, deathAny, deathAnySlot, deathRefSlot uint32
+	buf := make([]byte, chunk+16)
+	for _, reg := range p.ReadableRegions() {
+		if reg.Base >= 0x10000000 {
+			continue
+		}
+		for off := uint32(0); off < reg.Size; off += chunk {
+			n := reg.Size - off
+			if n > chunk {
+				n = chunk
 			}
-			seen[v] = true
-			if deathAny != 0 && diff != 0 {
+			if n < 4 {
 				break
 			}
-			// 先做便宜的结构检查，再做类名解析
-			if deathAny == 0 {
-				if d, ok := p.ReadI32(v + OffDeathCounterValue); ok && d >= 0 && d <= 1000000 {
-					if classOfAt(v) == "SeinDeathCounter" {
-						if deathRef == 0 {
-							if ref, ok2 := p.ReadU32(v + 0x28); ok2 && ref == sein {
-								deathRef = v
+			b := buf[:n]
+			if !p.ReadBytes(reg.Base+off, b) {
+				continue
+			}
+			for i := 0; i+4 <= len(b); i += 4 {
+				v := u32at(b, i)
+				if !isHeapPtr(v) || seen[v] {
+					continue
+				}
+				seen[v] = true
+				slot := reg.Base + off + uint32(i)
+				if deathAny == 0 {
+					if d, ok := p.ReadI32(v + OffDeathCounterValue); ok && d >= 0 && d <= 1000000 {
+						if classOfAt(v) == "SeinDeathCounter" {
+							if deathRef == 0 && sein != 0 {
+								if ref, ok2 := p.ReadU32(v + 0x28); ok2 && ref == sein {
+									deathRef, deathRefSlot = v, slot
+								}
 							}
+							deathAny, deathAnySlot = v, slot
 						}
-						deathAny = v
 					}
 				}
-			}
-			if diff == 0 {
-				d1, ok1 := p.ReadI32(v + OffDiffDifficulty)
-				d2, ok2 := p.ReadI32(v + OffDiffLowest)
-				if ok1 && ok2 && d1 >= 0 && d1 <= 3 && d2 >= 0 && d2 <= 3 {
-					if classOfAt(v) == "DifficultyController" {
-						diff = v
+				if diff == 0 {
+					d1, ok1 := p.ReadI32(v + OffDiffDifficulty)
+					d2, ok2 := p.ReadI32(v + OffDiffLowest)
+					if ok1 && ok2 && d1 >= 0 && d1 <= 3 && d2 >= 0 && d2 <= 3 {
+						if classOfAt(v) == "DifficultyController" {
+							diff, diffSlot = v, slot
+						}
 					}
 				}
 			}
 		}
 	}
 	if deathRef != 0 {
-		death = deathRef
+		death, deathSlot = deathRef, deathRefSlot
 	} else {
-		death = deathAny
+		death, deathSlot = deathAny, deathAnySlot
 	}
-	return death, diff
+	if debugAux {
+		fmt.Fprintf(os.Stderr, "[aux] sein=%08X cand=%d death=%08X slot=%08X diff=%08X dslot=%08X\n",
+			sein, len(seen), death, deathSlot, diff, diffSlot)
+	}
+	return death, diff, deathSlot, diffSlot
 }
 
 // ---------- 快照（TUI 渲染用）----------

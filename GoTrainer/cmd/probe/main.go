@@ -148,6 +148,12 @@ func main() {
 		cmdAllRefs(p)
 	case "diffstrict":
 		cmdDiffStrict(p)
+	case "staticblock":
+		cmdStaticBlock(p)
+	case "corereg":
+		cmdCoreReg(p)
+	case "racetest":
+		cmdRaceTest(p)
 	case "strref":
 		cmdStrRef(p)
 	case "fields2":
@@ -684,7 +690,7 @@ func cmdStruct(p *core.Process) {
 		note := ""
 		if raw >= 0x10000 {
 			// 可疑指针: 尝试读取目标首 dword（类指针通常是 0x2xxxxxxx-0x6xxxxxxx）
-			if cls, ok := p.ReadU32(raw); ok && cls >= 0x20000000 && cls < 0x70000000 {
+			if cls, ok := p.ReadU32(raw); ok && cls >= 0x20000000 && cls < 0xFFFF0000 {
 				note = fmt.Sprintf("-> 0x%08X (class 0x%08X)", raw, cls)
 			}
 		}
@@ -869,7 +875,7 @@ func cmdDiffScan(p *core.Process) {
 		}
 		for off := 0; off+0x28 <= len(buf); off += 4 {
 			v := u32atb(buf, off)
-			if v < 0x40000000 || v >= 0x70000000 || v&3 != 0 {
+			if v < 0x40000000 || v >= 0xFFFF0000 || v&3 != 0 {
 				continue
 			}
 			if u32atb(buf, off+4) != 0 || u32atb(buf, off+0x24) != 0 {
@@ -964,7 +970,7 @@ func cmdClass(p *core.Process) {
 						continue
 					}
 					// klass 首字段应是指针（element_class/cast_class 等）
-					if c0, ok := p.ReadU32(k); ok && c0 >= 0x10000 && c0 < 0x70000000 {
+					if c0, ok := p.ReadU32(k); ok && c0 >= 0x10000 && c0 < 0xFFFF0000 {
 						if _, dup := foundKlass[k]; !dup {
 							foundKlass[k] = no
 						}
@@ -1031,7 +1037,7 @@ func cmdLive(p *core.Process) {
 		}
 		for off := 0; off+16 <= len(buf); off += 4 {
 			v := u32atb(buf, off)
-			if v < 0x40000000 || v >= 0x70000000 || v&3 != 0 {
+			if v < 0x40000000 || v >= 0xFFFF0000 || v&3 != 0 {
 				continue
 			}
 			v2 := u32atb(buf, off+12)
@@ -1067,7 +1073,7 @@ func cmdLive(p *core.Process) {
 // validateSein 验证 P 是否满足活体 SeinCharacter 结构。
 func validateSein(p *core.Process, v uint32) bool {
 	vt, ok := p.ReadU32(v)
-	if !ok || vt < 0x20000000 || vt >= 0x70000000 {
+	if !ok || vt < 0x20000000 || vt >= 0xFFFF0000 {
 		return false
 	}
 	lvl, ok1 := p.ReadU32(v + 0x38)
@@ -1221,7 +1227,7 @@ func cmdStaticRef(p *core.Process) {
 			}
 			for off := 0; off+4 <= int(sz); off += 4 {
 				v := u32atb(buf, off)
-				if v < 0x40000000 || v >= 0x70000000 || v&3 != 0 {
+				if v < 0x40000000 || v >= 0xFFFF0000 || v&3 != 0 {
 					continue
 				}
 				slots = append(slots, slot{uint32(base) + uint32(off), v})
@@ -1236,7 +1242,7 @@ func cmdStaticRef(p *core.Process) {
 	for _, s := range slots {
 		kv, ok := vtCache[s.val]
 		if !ok {
-			if vt, ok2 := p.ReadU32(s.val); ok2 && vt >= 0x40000000 && vt < 0x70000000 {
+			if vt, ok2 := p.ReadU32(s.val); ok2 && vt >= 0x40000000 && vt < 0xFFFF0000 {
 				if kk, ok3 := p.ReadU32(vt); ok3 {
 					kv = kk
 				}
@@ -1266,7 +1272,7 @@ func dumpFields(p *core.Process, obj uint32, n int) {
 			break
 		}
 		note := fmt.Sprintf("i32=%-11d f32=%-12.5g", int32(v), math.Float32frombits(v))
-		if v >= 0x10000000 && v < 0x70000000 {
+		if v >= 0x10000000 && v < 0xFFFF0000 {
 			if cn := className(p, v); cn != "" {
 				note += "  -> " + cn
 			} else if s := readCStr(p, v); isIdent(s) {
@@ -1311,13 +1317,13 @@ func cmdStaticMap(p *core.Process) {
 			}
 			for off := 0; off+4 <= int(sz); off += 4 {
 				v := u32atb(buf, off)
-				if v < 0x40000000 || v >= 0x70000000 || v&3 != 0 {
+				if v < 0x40000000 || v >= 0xFFFF0000 || v&3 != 0 {
 					continue
 				}
 				nm, ok := vtToName[v]
 				if !ok {
 					nm = ""
-					if vt, ok2 := p.ReadU32(v); ok2 && vt >= 0x40000000 && vt < 0x70000000 {
+					if vt, ok2 := p.ReadU32(v); ok2 && vt >= 0x40000000 && vt < 0xFFFF0000 {
 						if kn, ok3 := klassToName[vt]; ok3 {
 							nm = kn
 						} else if np, ok4 := p.ReadU32(vt + 0x30); ok4 && np >= 0x10000 {
@@ -1602,7 +1608,7 @@ func cmdObjOf(p *core.Process) {
 			}
 			for off := 0; off+8 <= int(sz); off += 4 {
 				vt := u32atb(buf, off)
-				if vt < 0x08000000 || vt >= 0x70000000 || vt&3 != 0 {
+				if vt < 0x08000000 || vt >= 0xFFFF0000 || vt&3 != 0 {
 					continue
 				}
 				nm, ok := nameCache[vt]
@@ -1647,15 +1653,15 @@ func cmdObjOf(p *core.Process) {
 // u32(klass)==klass）。自指校验可排除堆上垃圾数据凑出的假 klass。
 // vtable 允许位于元数据带（纯托管类）或堆带（MonoBehaviour 派生类）。
 func classOf(p *core.Process, obj uint32) (string, uint32, bool) {
-	if obj < 0x40000000 || obj >= 0x70000000 {
+	if obj < 0x40000000 || obj >= 0xFFFF0000 {
 		return "", 0, false
 	}
 	vt, ok := p.ReadU32(obj)
-	if !ok || vt < 0x08000000 || vt >= 0x70000000 || vt&3 != 0 {
+	if !ok || vt < 0x08000000 || vt >= 0xFFFF0000 || vt&3 != 0 {
 		return "", 0, false
 	}
 	k, ok := p.ReadU32(vt)
-	if !ok || k < 0x08000000 || k >= 0x70000000 || k == vt {
+	if !ok || k < 0x08000000 || k >= 0xFFFF0000 || k == vt {
 		return "", 0, false
 	}
 	if k0, ok := p.ReadU32(k); !ok || k0 != k { // klass 自指
@@ -1831,7 +1837,7 @@ func cmdSingleton(p *core.Process) {
 			}
 			for off := 0; off+4 <= int(sz); off += 4 {
 				v := u32atb(buf, off)
-				if v < 0x40000000 || v >= 0x70000000 || v&3 != 0 {
+				if v < 0x40000000 || v >= 0xFFFF0000 || v&3 != 0 {
 					continue
 				}
 				if nm, _, ok := classOf(p, v); ok && nm == target {
@@ -2139,6 +2145,162 @@ func cmdDiffStrict(p *core.Process) {
 	fmt.Printf("diffstrict 命中 %d 个 [%.1fs]\n", n, time.Since(t0).Seconds())
 }
 
+// cmdRaceTest 复现"会话切换 + 引擎并发"时序，配合 -race 使用。
+//
+//	probe racetest
+//
+// 模拟 UI 反复重建功能表（BuildFeatures）的同时，另一协程持续 TickAll，
+// 用于验证全局执行器列表的并发保护是否有效。
+func cmdRaceTest(p *core.Process) {
+	rt := &ori.Runtime{}
+	rt.SetProcess(p)
+	rt.Refresh()
+
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			ori.TickAll(rt)
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			rt.Refresh()
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+
+	for i := 0; i < 30; i++ {
+		fs := ori.BuildFeatures()
+		ori.SetActiveRuntime(rt)
+		if len(fs) > 0 {
+			ori.ActivateFeature(fs[0])
+			ori.DeactivateFeature(fs[0], rt)
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+	close(done)
+	time.Sleep(100 * time.Millisecond)
+	fmt.Println("racetest 完成（若存在数据竞争，-race 会在上方输出报告）")
+}
+
+// cmdCoreReg 打印修改器 core.ReadableRegions() 实际枚举到的区域，
+// 并可查询指定地址是否被覆盖（诊断"扫描漏段"问题）。
+//
+//	probe corereg [0xADDR ...]
+func cmdCoreReg(p *core.Process) {
+	regs := p.ReadableRegions()
+	var total uint64
+	for _, r := range regs {
+		total += uint64(r.Size)
+	}
+	fmt.Printf("core.ReadableRegions: %d 段, 合计 %.1f MB\n", len(regs), float64(total)/(1<<20))
+	for _, a := range os.Args[2:] {
+		addr := uint32(parseHex(a))
+		hit := false
+		for _, r := range regs {
+			if addr >= r.Base && addr < r.Base+r.Size {
+				fmt.Printf("  0x%08X 在 base=0x%08X size=0x%X 段内\n", addr, r.Base, r.Size)
+				hit = true
+			}
+		}
+		if !hit {
+			fmt.Printf("  0x%08X **未被任何段覆盖**\n", addr)
+		}
+	}
+	fmt.Printf("--- 低区段（<0x10000000）---\n")
+	n := 0
+	var lowTotal uint64
+	for _, r := range regs {
+		if r.Base >= 0x10000000 {
+			continue
+		}
+		lowTotal += uint64(r.Size)
+		n++
+		if n <= 25 {
+			fmt.Printf("  0x%08X size=0x%-8X\n", r.Base, r.Size)
+		}
+	}
+	fmt.Printf("  低区共 %d 段, 合计 %.1f MB\n", n, float64(lowTotal)/(1<<20))
+}
+
+// cmdStaticBlock 在指定类的 MonoClass 结构内寻找静态数据块，用于定位
+// 静态字段（如 Characters.Sein）。
+//
+//	probe staticblock <ClassName> <hexTargetValue>
+//
+// 方法: 先按类名解析 klass，再在 klass 的前后内存与它包含的指针目标中
+// 搜索等于 target 的槽位。找到的槽位就是该静态字段的真实存储地址。
+func cmdStaticBlock(p *core.Process) {
+	if len(os.Args) < 4 {
+		fmt.Println("usage: probe staticblock <ClassName> <hexValue>")
+		return
+	}
+	name := os.Args[2]
+	target := uint32(parseHex(os.Args[3]))
+	t0 := time.Now()
+	k := findKlassByName(p, name)
+	if k == 0 {
+		fmt.Printf("未找到类 %q [%.1fs]\n", name, time.Since(t0).Seconds())
+		return
+	}
+	fmt.Printf("klass=0x%08X (%s) [%.1fs]\n", k, name, time.Since(t0).Seconds())
+
+	// ① klass 内部直接槽 / 一级间接（窗口放宽到 0x2000，静态块可能在 vtable 之后）
+	for off := uint32(0); off < 0x400; off += 4 {
+		if v, ok := p.ReadU32(k + off); ok && v == target {
+			fmt.Printf("  ★ klass+0x%03X 直接存放目标\n", off)
+		}
+		w, ok := p.ReadU32(k + off)
+		if !ok || w < 0x10000 || w >= 0x80000000 || w&3 != 0 {
+			continue
+		}
+		for o2 := uint32(0); o2 < 0x2000; o2 += 4 {
+			if v, ok := p.ReadU32(w + o2); ok && v == target {
+				fmt.Printf("  ★ klass+0x%03X -> 0x%08X + 0x%03X = 目标 (槽 0x%08X)\n", off, w, o2, w+o2)
+			}
+		}
+	}
+	// ② klass 前后裸内存（静态块可能紧邻 klass）
+	for _, base := range []uint32{k - 0x2000, k + 0x1000} {
+		for off := uint32(0); off < 0x4000; off += 4 {
+			if v, ok := p.ReadU32(base + off); ok && v == target {
+				fmt.Printf("  ★ 0x%08X (klass%+d) 存放目标\n", base+off, int32(base+off-k))
+			}
+		}
+	}
+	// ③ 查 MonoVTable: 全地址空间搜索 dword == klass 的槽位，
+	//    再在其后窗口内找目标（静态字段数据内联在 vtable 之后）。
+	needle := make([]byte, 4)
+	binary.LittleEndian.PutUint32(needle, k)
+	vtHits := 0
+	for _, r := range normRegions(p.Handle) {
+		for _, at := range scanRegion(p, r, needle, 4) {
+			vtHits++
+			if vtHits > 64 {
+				break
+			}
+			for o2 := uint32(0); o2 < 0x2000; o2 += 4 {
+				if v, ok := p.ReadU32(at + o2); ok && v == target {
+					fmt.Printf("  ★ vtable候选 0x%08X + 0x%03X = 目标\n", at, o2)
+				}
+			}
+		}
+	}
+	fmt.Printf("  (vtable 候选命中 %d 处)\n", vtHits)
+	fmt.Printf("staticblock 完成 [%.1fs]\n", time.Since(t0).Seconds())
+}
+
 // cmdAllRefs 全地址带查找指向指定地址/值的槽位（不限低区）。
 //
 //	probe allrefs 0xADDR [maxShow]
@@ -2207,13 +2369,13 @@ func cmdOneScan(p *core.Process) {
 					continue
 				}
 				del := u32atb(buf, off+0x20)
-				if del < 0x40000000 || del >= 0x70000000 {
+				if del < 0x40000000 || del >= 0xFFFF0000 {
 					continue
 				}
 				obj := uint32(base) + uint32(off)
 				// [0] 必须是合法 vtable
 				vt := u32atb(buf, off)
-				if vt < 0x08000000 || vt >= 0x70000000 || vt&3 != 0 {
+				if vt < 0x08000000 || vt >= 0xFFFF0000 || vt&3 != 0 {
 					continue
 				}
 				kn, ok := p.ReadU32(vt)
@@ -2494,7 +2656,7 @@ func cmdFindAll(p *core.Process) {
 			}
 			for off := 0; off+8 <= int(sz); off += 4 {
 				vt := u32atb(buf, off)
-				if vt < 0x08000000 || vt >= 0x70000000 || vt&3 != 0 {
+				if vt < 0x08000000 || vt >= 0xFFFF0000 || vt&3 != 0 {
 					continue
 				}
 				obj := uint32(base) + uint32(off)

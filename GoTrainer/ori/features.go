@@ -7,6 +7,7 @@ package ori
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 )
 
@@ -445,6 +446,14 @@ func (o *OneLifeProtect) ResetForNewProcess() {
 // ---------- 全局状态 ----------
 
 var (
+	// tickersMu 保护 allTickers / featureActivators。
+	//
+	// 必要性: 用户在"版本选择"与"修改器界面"之间来回切换时，新会话的
+	// BuildFeatures 会重建这两个全局对象，而上一会话的功能引擎协程可能
+	// 仍在 TickAll 中遍历旧切片。并发读写切片头会导致越界 panic 并让
+	// 整个进程静默退出（实测症状: 修改器无故从任务栏消失）。
+	tickersMu sync.RWMutex
+
 	allTickers  []ticker
 	oneLife     = NewOneLifeProtect() // 一命保护（Ctrl+小键盘 1）
 	xpBoostBase atomic.Int32          // 经验倍率的"未放大基数"
@@ -461,16 +470,26 @@ var (
 
 // SetActiveRuntime 由 UI 层在建立会话时调用，供互斥逻辑还原数值。
 func SetActiveRuntime(r *Runtime) {
+	tickersMu.Lock()
 	activeRuntime = r
+	tickersMu.Unlock()
 }
 
 // OneLife 返回一命保护实例。
 func OneLife() *OneLifeProtect { return oneLife }
 
+// activatorFor 取某功能的自定义激活副作用（加锁读）。
+func activatorFor(f *Feature) (func(bool), bool) {
+	tickersMu.RLock()
+	defer tickersMu.RUnlock()
+	fn, ok := featureActivators[f]
+	return fn, ok
+}
+
 // ActivateFeature 激活功能（先设置状态，再执行器特定的激活副作用）。
 func ActivateFeature(f *Feature) {
 	f.SetActive(true)
-	if act, ok := featureActivators[f]; ok {
+	if act, ok := activatorFor(f); ok {
 		act(true)
 	}
 }
@@ -482,7 +501,10 @@ func DeactivateFeature(f *Feature, r *Runtime) {
 		return
 	}
 	// 可还原型执行器: setFloat（倍率放大）、xpBoostOption（经验倍率）
-	for _, t := range allTickers {
+	tickersMu.RLock()
+	snapshot := allTickers
+	tickersMu.RUnlock()
+	for _, t := range snapshot {
 		if sf, ok := t.(*setFloat); ok && sf.f == f {
 			if r != nil {
 				sf.OnDeactivate(r)
@@ -498,14 +520,20 @@ func DeactivateFeature(f *Feature, r *Runtime) {
 	}
 done:
 	f.SetActive(false)
-	if act, ok := featureActivators[f]; ok {
+	if act, ok := activatorFor(f); ok {
 		act(false)
 	}
 }
 
 // TickAll 驱动所有激活中的功能。
+//
+// 先对执行器列表做快照再遍历: BuildFeatures 可能在另一协程重建该列表
+// （用户切换会话时），直接遍历全局切片会数据竞争。
 func TickAll(r *Runtime) {
-	for _, t := range allTickers {
+	tickersMu.RLock()
+	snapshot := allTickers
+	tickersMu.RUnlock()
+	for _, t := range snapshot {
 		t.Tick(r)
 	}
 	oneLife.Tick(r)
@@ -598,8 +626,14 @@ func (g *xpBoostOption) OnDeactivate(r *Runtime) {
 // ---------- 功能表 ----------
 
 // BuildFeatures 构建功能表（键位对齐风灵月影 DE v1.0 Plus 13）。
+//
+// 全程持有 tickersMu 写锁: 重建 allTickers / featureActivators 期间，
+// 上一会话的功能引擎协程可能仍在 TickAll（见 tickersMu 注释）。
 func BuildFeatures() []*Feature {
+	tickersMu.Lock()
+	defer tickersMu.Unlock()
 	allTickers = nil
+	featureActivators = map[*Feature]func(on bool){}
 	xpBoostBase.Store(0)
 	xpBoostLast.Store(0)
 
