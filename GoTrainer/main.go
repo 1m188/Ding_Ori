@@ -37,6 +37,7 @@ var (
 	pReadCI   = k32.NewProc("ReadConsoleInputW")
 	pCreateW  = k32.NewProc("CreateFileW")
 	pNumCI    = k32.NewProc("GetNumberOfConsoleInputEvents")
+	pGetInfo  = k32.NewProc("GetConsoleScreenBufferInfo")
 )
 
 const stdOutputHandle = ^uintptr(10) // STD_OUTPUT_HANDLE = (DWORD)-11
@@ -53,6 +54,55 @@ func init() {
 	if t, err := syscall.UTF16PtrFromString("OriTrainer — 版本选择"); err == nil {
 		pSetTitle.Call(uintptr(unsafe.Pointer(t)))
 	}
+	// 进入备用屏幕缓冲区并隐藏光标:
+	// 备用缓冲区没有回滚历史，界面在原地刷新，不会不断向下追加内容
+	// （旧实现每次 ESC[2J + 从头写，在窗口比内容矮时会持续滚屏、滚动条
+	//  一直下移）。不支持 1049 的宿主会忽略该序列，此时仍有 render() 的
+	// 高度截断 + ESC[J 兜底。
+	writeConsole("\x1b[?1049h\x1b[?25l")
+}
+
+// cleanupConsole 退出前恢复终端状态（os.Exit 不会执行 defer）。
+func cleanupConsole() {
+	writeConsole("\x1b[?25h\x1b[?1049l")
+}
+
+// ---------- 画面输出 ----------
+
+type smallRect struct{ Left, Top, Right, Bottom int16 }
+
+type consoleScreenBufferInfo struct {
+	Size      coord
+	Cursor    coord
+	Attrs     uint16
+	Window    smallRect
+	MaxWindow coord
+}
+
+// windowHeight 返回可见窗口的行数（取不到时按 25 行估算）。
+func windowHeight() int {
+	var info consoleScreenBufferInfo
+	if r, _, _ := pGetInfo.Call(stdoutHandle, uintptr(unsafe.Pointer(&info))); r == 0 {
+		return 25
+	}
+	h := int(info.Window.Bottom-info.Window.Top) + 1
+	if h < 8 {
+		h = 8
+	}
+	return h
+}
+
+// render 输出一帧: 光标归位 → 写内容 → 清除下方残留。
+//
+// 内容按"窗口高度 - 1"截断: 只要不写到最后一行的换行就不会触发滚动，
+// 这样界面始终原地刷新，滚动条不会下移。
+func render(s string) {
+	s = strings.TrimRight(s, "\n")
+	lines := strings.Split(s, "\n")
+	if max := windowHeight() - 1; len(lines) > max && max > 0 {
+		lines = lines[:max]
+	}
+	writeConsole("\x1b[H" + strings.Join(lines, "\n") + "\x1b[J")
 }
 
 // ---------- 控制台输入（界面按键的唯一来源） ----------
@@ -392,8 +442,6 @@ func (a *app) choose(prof ori.Profile) {
 
 func renderSelector(a *app) {
 	var b strings.Builder
-	b.WriteString("\x1b[2J")
-	homeCursor()
 
 	b.WriteString(cTitle + "  OriTrainer — 奥日与迷失森林 双版本修改器\n\n" + cReset)
 	b.WriteString(cWhite + "  请选择游戏版本（↑↓/WS 选择，回车确认）:\n\n" + cReset)
@@ -413,18 +461,16 @@ func renderSelector(a *app) {
 	b.WriteString("  " + cWhite + "↑/↓ 或 W/S" + cReset + " 选择   " + cWhite + "回车" + cReset + " 进入   " + cWhite + "ESC" + cReset + " 退出\n")
 	b.WriteString("  " + cDim + a.getMsg() + cReset + "\n")
 
-	writeConsole(b.String())
+	render(b.String())
 }
 
 // ---------- 修改器界面 ----------
 
 func renderTrainer(a *app, s *session) {
 	var b strings.Builder
-	b.WriteString("\x1b[2J")
-	homeCursor()
 
-	b.WriteString(cTitle + "  OriTrainer v2.0 — " + s.prof.DisplayName + " 修改器\n" + cReset)
-	b.WriteString(cDim + "  [ESC] 返回版本选择\n" + cReset)
+	b.WriteString(cTitle + "  OriTrainer v2.0 — " + s.prof.DisplayName + " 修改器" + cReset +
+		cDim + "    [ESC] 返回版本选择" + cReset + "\n")
 	b.WriteString(cBox + "  ────────────────────────────────────────────────────────\n" + cReset)
 
 	snap := s.r.Read()
@@ -473,13 +519,13 @@ func renderTrainer(a *app, s *session) {
 	}
 
 	b.WriteString(cBox + "  ────────────────────────────────────────────────────────\n" + cReset)
-	b.WriteString("  " + cDim + "本窗口内: ↑↓ 选择 · 回车/空格 开关   |   " + cReset +
-		cWhite + "小键盘 1-9/0" + cReset + " 前 10 项   " + cWhite + "Ctrl+小键盘" + cReset + " 后 6 项（全局，免切窗）\n")
-	b.WriteString("  " + cWhite + "HOME" + cReset + " 全关   " + cWhite + "F12" + cReset + " 重扫   " +
+	b.WriteString("  " + cDim + "本窗口: ↑↓ 选择 · 回车/空格 开关   |   " + cReset +
+		cWhite + "小键盘 1-7" + cReset + " · " + cWhite + "Ctrl+小键盘 1-2" + cReset + "（全局，免切窗）   " +
+		cWhite + "HOME" + cReset + " 全关   " + cWhite + "F12" + cReset + " 重扫   " +
 		cWhite + "F1" + cReset + " 帮助   " + cWhite + "ESC" + cReset + " 返回   " + cWhite + "END" + cReset + " 退出\n")
 	b.WriteString("  " + cDim + a.getMsg() + cReset + "\n")
 
-	writeConsole(b.String())
+	render(b.String())
 }
 
 // statusColor 根据状态文本返回配色。
@@ -611,7 +657,8 @@ func main() {
 				a.choose(prof)
 			}
 			if selEsc {
-				fmt.Println("\n退出。")
+				cleanupConsole()
+				fmt.Println("退出。")
 				os.Exit(0)
 			}
 			renderSelector(a)
@@ -639,7 +686,8 @@ func main() {
 		if endPressed {
 			ori.DeactivateAll(s.feats, s.r)
 			s.closeProc()
-			fmt.Println("\nOriTrainer 已退出。")
+			cleanupConsole()
+			fmt.Println("OriTrainer 已退出。")
 			os.Exit(0)
 		}
 		if escPressed {

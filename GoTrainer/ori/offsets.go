@@ -128,6 +128,7 @@ const (
 	OffSoulFlameLock              = 0xA4 // LockSoulFlame (bool) —— 置0解除锁定
 	OffSoulFlameCastCount         = 0x90 // m_numberOfSoulFlamesCast
 	OffSoulFlameHoldDown          = 0x94 // m_holdDownTime
+	OffSoulFlameTapRemaining      = 0xB8 // m_tapRemainingTime: >0 表示仍处于"轻点"窗口（松开即开技能树）
 )
 
 // SeinJump 字段偏移（跳跃强化）。

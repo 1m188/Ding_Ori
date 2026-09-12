@@ -157,6 +157,8 @@ func main() {
 		cmdRaceTest(p)
 	case "conin":
 		cmdConIn()
+	case "diffname":
+		cmdDiffName(p)
 	case "strref":
 		cmdStrRef(p)
 	case "fields2":
@@ -2104,6 +2106,41 @@ func parseHex(s string) uint64 {
 	s = strings.TrimPrefix(strings.TrimPrefix(s, "0x"), "0X")
 	n, _ := strconv.ParseUint(s, 16, 64)
 	return n
+}
+
+// cmdDiffName 无过滤地列出所有"类名 == DifficultyController"的堆对象，
+// 用于确认活体单例是否存在（不校验 monitor/字段值/委托）。
+func cmdDiffName(p *core.Process) {
+	t0 := time.Now()
+	n := 0
+	for _, r := range normRegions(p.Handle) {
+		if r.Base < 0x40000000 {
+			continue
+		}
+		const chunk = 8 << 20
+		for base := r.Base; base < r.Base+r.Size; base += chunk {
+			sz := uint64(chunk)
+			if r.Base+r.Size-base < sz {
+				sz = r.Base + r.Size - base
+			}
+			buf := make([]byte, sz)
+			if !p.ReadBytes(uint32(base), buf) {
+				continue
+			}
+			for off := 0; off+0x28 <= int(sz); off += 4 {
+				obj := uint32(base) + uint32(off)
+				if nm, _, ok := classOf(p, obj); !ok || nm != "DifficultyController" {
+					continue
+				}
+				n++
+				fmt.Printf("  obj=0x%08X  +4=0x%08X  +0x18(i32)=%d  +0x1C(i32)=%d  +0x20=0x%08X\n",
+					obj, u32atb(buf, off+4),
+					int32(u32atb(buf, off+0x18)), int32(u32atb(buf, off+0x1C)),
+					u32atb(buf, off+0x20))
+			}
+		}
+	}
+	fmt.Printf("diffname 命中 %d 个 [%.1fs]\n", n, time.Since(t0).Seconds())
 }
 
 // cmdDiffStrict 严格签名扫描 DifficultyController 活体实例。

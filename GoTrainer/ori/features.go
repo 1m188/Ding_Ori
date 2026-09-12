@@ -362,7 +362,19 @@ func (g *soulFlameAnywhere) Tick(r *Runtime) {
 		g.f.setStatus("落地延迟中…")
 		return
 	}
-	// 核心: 把蓄力写满，跳过安全判定的累加过程
+	// 关键: 若仍处于"轻点"窗口内（m_tapRemainingTime > 0），绝不干预。
+	//
+	// 游戏用同一按键区分两种操作（见 SeinSoulFlame.UpdateCharacterState）:
+	//   轻点（按下后 0.3 秒内松开）→ 打开技能树
+	//   长按（超过 0.3 秒）        → 就地建立灵魂链接
+	// 判定依据是 m_tapRemainingTime: 按下时置 0.3 并递减，归零后才是长按。
+	// 若在轻点窗口内就把 m_holdDownTime 写满，游戏会把这次按键当成"长按"，
+	// 轻点路径失效 —— 表现就是"建立链接后进不去技能界面"。
+	if tap, ok := p.ReadF32(sf + OffSoulFlameTapRemaining); ok && tap > 0 {
+		g.f.setStatus("轻点窗口内（松开即开技能树）")
+		return
+	}
+	// 核心: 此时确认是长按，把蓄力写满，跳过安全判定的累加过程
 	if p.WriteF32(sf+OffSoulFlameHoldDown, 1.0) {
 		g.f.setStatus("已强制蓄力 ✓ 可在此区域建链接")
 	} else {
@@ -747,9 +759,15 @@ func (g *infiniteDoubleJump) Tick(r *Runtime) {
 }
 
 func (g *infiniteDoubleJump) OnDeactivate(r *Runtime) {
-	if g.have && g.abilit != 0 {
-		r.Proc.WriteU8(g.abilit, g.orig)
-	}
+	// 刻意不还原 HasAbility。
+	//
+	// 游戏的 SeinNestedPrefab.IsInstantiated setter 在置 false 时会直接
+	// Destroy() 掉对应的能力组件（见源码 EnsureRightPrefabsAreThereForAbilities）。
+	// 若关闭时把能力还原为 0，二段跳组件会被销毁；再次开启只写标志位无法
+	// 将其重建，于是"关闭后再打开就失效"。
+	//
+	// 因此首次开启后能力保持授予（副作用: 关闭功能后仍保留普通二段跳，
+	// 即一次空中跳）。关闭功能只是停止维持无限次数。
 	g.have, g.abilit = false, 0
 }
 
@@ -893,9 +911,9 @@ func BuildFeatures() []*Feature {
 		allTickers = append(allTickers, &setIntMin{f: f, get: get, target: target})
 		return f
 	}
-	// 不安全区域也可建立灵魂链接（小键盘 4，对齐 FLiNG 键位）
-	newSoulFlameAnywhere := func() *Feature {
-		f := NewFeature(4, "可在不安全区域建立灵魂链接")
+	// 不安全区域也可建立灵魂链接
+	newSoulFlameAnywhere := func(digit int) *Feature {
+		f := NewFeature(digit, "可在不安全区域建立灵魂链接")
 		allTickers = append(allTickers, &soulFlameAnywhere{f: f})
 		return f
 	}
@@ -910,18 +928,15 @@ func BuildFeatures() []*Feature {
 	// 溢出部分再用 Ctrl+小键盘。一命保护占用 Ctrl+小键盘 1（见 oneLife 单例）。
 
 	return []*Feature{
-		// ===== 小键盘 1-9/0（前 10 项）=====
+		// ===== 小键盘 1-7（顺序编号，无空位）=====
 		newRefill(1, "无限生命", hp, hpMax, true, HealthPointsPerCell, " 球"),
 		newRefill(2, "无限能量", en, enMax, false, 1, ""),
 		newZeroFloat(3, "灵魂链接无需冷却", soulCd),
-		newSoulFlameAnywhere(), // 小键盘 4
+		newSoulFlameAnywhere(4), // 可在不安全区域建立灵魂链接
 		newSuperJump(5, 2.5),
-		// 小键盘 6 空位（原"超级跳冲量"已移除）
-		newInfiniteDoubleJump(7),
-		// 小键盘 8 空位（原"二段跳强化"已移除）
-		// 小键盘 9 空位（原"无限经验"已移除：能力由"无限能力点数"直接提供）
-		newIntMin(0, "无限能力点数", lvlSP, 999),
-		// ===== Ctrl+小键盘（第 11 项起；Ctrl+1 为一命保护，见 oneLife）=====
+		newInfiniteDoubleJump(6),
+		newIntMin(7, "无限能力点数", lvlSP, 999),
+		// ===== Ctrl+小键盘（Ctrl+1 为一命保护，见 oneLife）=====
 		newCtrlCounterLock(2, "死亡数归零", deaths, 0),
 	}
 }
