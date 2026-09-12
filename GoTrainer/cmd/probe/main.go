@@ -2270,10 +2270,27 @@ func cmdConIn() {
 			seen++
 		}
 	}
-	if seen > 0 {
-		fmt.Printf("conin: 通过 ✓  注入 VK 0x41，读回 %d 条记录，识别到 %d 条按下事件\n", n, seen)
-	} else {
+	if seen == 0 {
 		fmt.Printf("conin: 失败 ✗  读回 %d 条记录，但未识别到 VK 0x41 按下事件\n", n)
+		return
+	}
+	fmt.Printf("conin: 通过 ✓  注入 VK 0x41，读回 %d 条记录，识别到 %d 条按下事件\n", n, seen)
+
+	// 关键: 验证"空缓冲时不阻塞"。ReadConsoleInputW 在无事件时会阻塞，
+	// 修改器必须先查事件数再读，否则界面会卡死到下一次按键。
+	getNum := k.NewProc("GetNumberOfConsoleInputEvents")
+	var avail uint32
+	getNum.Call(h, uintptr(unsafe.Pointer(&avail)))
+	start := time.Now()
+	if avail > 0 {
+		var got uint32
+		readCI.Call(h, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), uintptr(unsafe.Pointer(&got)))
+	}
+	el := time.Since(start)
+	if avail == 0 {
+		fmt.Printf("conin: 通过 ✓  排空后事件数为 0，先查计数再读 → 立即返回（耗时 %v），不会阻塞界面\n", el)
+	} else {
+		fmt.Printf("conin: 注意  排空后仍有 %d 条事件（本环境输入缓冲非空）\n", avail)
 	}
 }
 

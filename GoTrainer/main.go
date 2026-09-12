@@ -36,6 +36,7 @@ var (
 	pSetTitle = k32.NewProc("SetConsoleTitleW")
 	pReadCI   = k32.NewProc("ReadConsoleInputW")
 	pCreateW  = k32.NewProc("CreateFileW")
+	pNumCI    = k32.NewProc("GetNumberOfConsoleInputEvents")
 )
 
 const stdOutputHandle = ^uintptr(10) // STD_OUTPUT_HANDLE = (DWORD)-11
@@ -88,11 +89,11 @@ type consoleKeys struct {
 }
 
 const (
+	// SetConsoleMode 的目标掩码（显式设定而非叠加，避免宿主遗留的
+	// ENABLE_VIRTUAL_TERMINAL_INPUT 等标志影响按键上报）:
+	// 处理输入（Ctrl+C 语义）+ 窗口输入（非字符键如 F1/方向键）。
 	ciEnableProcessedInput = 0x0001
-	ciEnableLineInput      = 0x0002
-	ciEnableEchoInput      = 0x0004
 	ciEnableWindowInput    = 0x0008
-	ciEnableQuickEdit      = 0x0040
 	ciEnableExtendedFlags  = 0x0080
 )
 
@@ -122,11 +123,12 @@ func newConsoleKeys() *consoleKeys {
 		c.handle = 0 // 不是控制台输入缓冲（被重定向且无控制台）
 		return c
 	}
-	// 关闭行输入/回显（没有人按行读，避免缓冲被行编辑器吃掉），保留
-	// 处理输入（Ctrl+C 语义不变）与快速编辑（保留鼠标选择文本），
-	// 打开窗口输入（否则收不到 F1/方向键等非字符键）。
-	const want = ciEnableProcessedInput | ciEnableWindowInput |
-		ciEnableQuickEdit | ciEnableExtendedFlags
+	// 关闭行输入/回显（没人按行读，避免缓冲被行编辑器吃掉）；保留处理输入
+	// （Ctrl+C 语义不变）；打开窗口输入（否则收不到 F1/方向键等非字符键）。
+	//
+	// 不启用 QuickEdit: 鼠标拖选会让后续 WriteConsole 阻塞、界面卡死
+	// （本程序持续重绘，拖选极易触发）。代价是不能用鼠标选择复制文本。
+	const want = ciEnableProcessedInput | ciEnableWindowInput | ciEnableExtendedFlags
 	pSetMode.Call(c.handle, uintptr(want))
 	c.ok = true
 	return c
@@ -134,11 +136,18 @@ func newConsoleKeys() *consoleKeys {
 
 // poll 读取并清空本轮按键事件。只记录按下事件；
 // 长按产生的重复事件也只是持续置位，边沿检测仍只触发一次。
+//
+// 必须先查事件数: ReadConsoleInputW 在缓冲为空时会**阻塞**，直接调用会
+// 让整个界面卡死在读取上直到有按键（严重且不易察觉）。
 func (c *consoleKeys) poll() {
 	for k := range c.press {
 		delete(c.press, k)
 	}
 	if c.handle == 0 {
+		return
+	}
+	var avail uint32
+	if r, _, _ := pNumCI.Call(c.handle, uintptr(unsafe.Pointer(&avail))); r == 0 || avail == 0 {
 		return
 	}
 	var read uint32
