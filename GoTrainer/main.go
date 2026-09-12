@@ -39,6 +39,11 @@ func init() {
 	var mode uint32
 	pGetMode.Call(stdoutHandle, uintptr(unsafe.Pointer(&mode)))
 	pSetMode.Call(stdoutHandle, uintptr(mode|0x0004))
+	// 启动即设置标题: 版本选择界面还没有会话标题，而前台判定的兜底
+	// 策略依赖标题包含 "trainer"，不设置会导致选择界面按键全部失灵。
+	if t, err := syscall.UTF16PtrFromString("OriTrainer — 版本选择"); err == nil {
+		pSetTitle.Call(uintptr(unsafe.Pointer(t)))
+	}
 }
 
 func writeConsole(s string) {
@@ -219,6 +224,48 @@ func toggleFeature(a *app, s *session, f *ori.Feature) {
 	}
 }
 
+// 前台判定模式: 0=校准中 1=正向判定可用 2=不可用
+var (
+	fgMode    int32
+	fgMissCnt int32
+)
+
+// uiKeysAllowed 界面/破坏性按键（选择、ESC、END、HOME 等）当前是否应当生效。
+//
+// 两条铁律:
+//  1. 游戏窗口在前台 → 一律不响应。真正必须防住的只有这一种情况——
+//     在游戏里按 ESC（打开暂停菜单）被误当成修改器的"返回版本选择"，
+//     再按一次直接退出程序。
+//  2. 其余情况尽量要求修改器窗口在前台，避免在别的窗口（比如编辑器里
+//     打字按到回车/ESC）误触发功能开关或退出。
+//
+// 但部分终端宿主拿不到自身窗口（Windows 11 默认终端为 Windows Terminal 时，
+// GetConsoleWindow 返回隐藏的 ConPTY 窗口、父进程链也不经过终端进程），
+// 正向判定会永远失败——若把失败当成"不在前台"，版本选择界面就会完全
+// 无法操作（用户实测：刚启动方向键/回车/ESC 全部失灵）。
+// 因此启动后先校准约 2 秒：正向判定命中过 → 长期启用正向判定；
+// 从未命中 → 退化为"只要游戏不在前台就生效"。
+func uiKeysAllowed() bool {
+	if core.GameFocusedAny(ori.Profiles[ori.Vanilla].ProcessName, ori.Profiles[ori.Definitive].ProcessName) {
+		return false
+	}
+	switch atomic.LoadInt32(&fgMode) {
+	case 2:
+		return true
+	case 1:
+		return core.WindowIsForeground()
+	default:
+		if core.WindowIsForeground() {
+			atomic.StoreInt32(&fgMode, 1)
+			return true
+		}
+		if atomic.AddInt32(&fgMissCnt, 1) >= 25 { // ~2 秒（80ms 一轮）
+			atomic.StoreInt32(&fgMode, 2)
+		}
+		return true
+	}
+}
+
 func (a *app) setMsg(s string) { a.msg.Store(s) }
 func (a *app) getMsg() string  { s, _ := a.msg.Load().(string); return s }
 
@@ -312,8 +359,8 @@ func renderTrainer(a *app, s *session) {
 		b.WriteString(cYel + "  [帮助] 冻结=激活时捕获当前值并持续写回; 进入存档后生效; 全局热键免切窗\n" + cReset)
 	}
 
-	// 前台导航: 窗口在前台时显示光标
-	fg := core.WindowIsForeground()
+	// 前台导航: 与按键判定保持一致（见 uiKeysAllowed 的说明）
+	fg := uiKeysAllowed()
 
 	// 统一渲染导航项（小键盘组 → 一命保护 → 其余 Ctrl 组）
 	rows := navList(s)
@@ -446,9 +493,10 @@ func main() {
 
 	for {
 		if !a.chosen {
-			// 选择界面的按键同样只在修改器窗口前台时响应，
-			// 否则在游戏里按回车/ESC 会误触发。
-			fgSel := core.WindowIsForeground()
+			// 界面按键: 只要游戏窗口不在前台就响应。
+			// （历史教训见 uiKeysAllowed —— 以"修改器在前台"为条件会让
+			// 部分终端宿主下选择界面完全无法操作。）
+			fgSel := uiKeysAllowed()
 			selUp := keys.pressed(vkUp) || keys.pressed(vkW)
 			selDown := keys.pressed(vkDown) || keys.pressed(vkS)
 			selRet := keys.pressed(vkReturn)
@@ -483,10 +531,8 @@ func main() {
 			continue
 		}
 
-		// 窗口前台状态：所有界面/破坏性按键（ESC/END/F1/HOME/导航）
-		// 只在修改器自己的窗口处于前台时生效。否则在游戏里按 ESC
-		// （打开暂停菜单）会被误当成"返回版本选择"，再按一次直接退出程序。
-		fg := core.WindowIsForeground()
+		// 窗口前台状态: 游戏窗口在前台时抑制所有界面按键（含 ESC/END/HOME）。
+		fg := uiKeysAllowed()
 
 		// 注意: 先统一采样按键边沿，再按前台状态决定是否响应，
 		// 保证 prev 状态每轮都更新，避免切回窗口时误触发。
@@ -556,9 +602,12 @@ func main() {
 			}
 		}
 
-		// ---- 前台导航：修改器窗口在前台时，用 ↑↓ 选择 + 回车/空格切换 ----
+		// ---- 前台导航：用 ↑↓ 选择 + 回车/空格切换 ----
 		// 供没有小键盘的键盘使用（全局热键仍可用）。
-		if core.WindowIsForeground() {
+		// 注意这里必须用与界面按键一致的判定（fg），不能用
+		// core.WindowIsForeground()：部分终端宿主下后者永远为假，
+		// 会导致方向键/回车导航失效。
+		if fg {
 			n := len(navList(s))
 			if keys.pressed(vkUp) || keys.pressed(vkW) {
 				if n > 0 {
