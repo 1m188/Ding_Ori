@@ -155,6 +155,8 @@ func main() {
 		cmdCoreReg(p)
 	case "racetest":
 		cmdRaceTest(p)
+	case "conin":
+		cmdConIn()
 	case "strref":
 		cmdStrRef(p)
 	case "fields2":
@@ -2198,6 +2200,81 @@ func cmdRaceTest(p *core.Process) {
 	close(done)
 	time.Sleep(100 * time.Millisecond)
 	fmt.Println("racetest 完成（若存在数据竞争，-race 会在上方输出报告）")
+}
+
+// cmdConIn 端到端自测控制台输入通路（与修改器 main.go 的实现保持一致）。
+//
+//	probe conin
+//
+// 步骤: 打开 CONIN$ → 设置输入模式 → 用 WriteConsoleInputW 注入合成按键
+// （VK 0x41 按下+抬起）→ ReadConsoleInputW 读回并检查。全程不需要人工按键，
+// 可确定性地验证句柄获取、输入模式与 INPUT_RECORD 结构布局。
+func cmdConIn() {
+	k := syscall.NewLazyDLL("kernel32.dll")
+	getMode := k.NewProc("GetConsoleMode")
+	setMode := k.NewProc("SetConsoleMode")
+	createFile := k.NewProc("CreateFileW")
+	readCI := k.NewProc("ReadConsoleInputW")
+	writeCI := k.NewProc("WriteConsoleInputW")
+
+	type ker struct {
+		down   int32
+		repeat uint16
+		vk     uint16
+		scan   uint16
+		ch     uint16
+		state  uint32
+	}
+	type rec struct {
+		typ uint16
+		_   uint16
+		key ker
+	}
+
+	conin, _ := syscall.UTF16PtrFromString("CONIN$")
+	h, _, _ := createFile.Call(uintptr(unsafe.Pointer(conin)),
+		0xC0000000, 0x3, 0, 3, 0, 0)
+	if h == 0 || h == ^uintptr(0) {
+		fmt.Println("conin: 无法打开 CONIN$（本环境无控制台）→ 修改器会走全局热键兜底")
+		return
+	}
+	var mode uint32
+	if r, _, _ := getMode.Call(h, uintptr(unsafe.Pointer(&mode))); r == 0 {
+		fmt.Println("conin: CONIN$ 上 GetConsoleMode 失败")
+		return
+	}
+	const want = 0x0001 | 0x0008 | 0x0040 | 0x0080
+	setMode.Call(h, uintptr(want))
+
+	recs := []rec{
+		{1, 0, ker{1, 1, 0x41, 0x1E, 'A', 0}},
+		{1, 0, ker{0, 1, 0x41, 0x1E, 'A', 0}},
+	}
+	var written uint32
+	if r, _, _ := writeCI.Call(h, uintptr(unsafe.Pointer(&recs[0])),
+		uintptr(len(recs)), uintptr(unsafe.Pointer(&written))); r == 0 {
+		fmt.Println("conin: WriteConsoleInputW 失败")
+		return
+	}
+
+	buf := make([]rec, 16)
+	var n uint32
+	if r, _, _ := readCI.Call(h, uintptr(unsafe.Pointer(&buf[0])),
+		uintptr(len(buf)), uintptr(unsafe.Pointer(&n))); r == 0 {
+		fmt.Println("conin: ReadConsoleInputW 失败")
+		return
+	}
+	seen := 0
+	for i := 0; i < int(n); i++ {
+		if buf[i].typ == 1 && buf[i].key.down != 0 && buf[i].key.vk == 0x41 {
+			seen++
+		}
+	}
+	if seen > 0 {
+		fmt.Printf("conin: 通过 ✓  注入 VK 0x41，读回 %d 条记录，识别到 %d 条按下事件\n", n, seen)
+	} else {
+		fmt.Printf("conin: 失败 ✗  读回 %d 条记录，但未识别到 VK 0x41 按下事件\n", n)
+	}
 }
 
 // cmdCoreReg 打印修改器 core.ReadableRegions() 实际枚举到的区域，

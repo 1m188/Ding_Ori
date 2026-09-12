@@ -3,8 +3,6 @@ package core
 
 import (
 	"fmt"
-	"os"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -239,70 +237,8 @@ func GetAsyncKeyDown(vk int) bool {
 
 var (
 	procGetForegroundWindow = moduser32.NewProc("GetForegroundWindow")
-	procGetConsoleWindow    = modkernel32.NewProc("GetConsoleWindow")
 	procGetWindowThreadProc = moduser32.NewProc("GetWindowThreadProcessId")
-	procGetWindowTextW      = moduser32.NewProc("GetWindowTextW")
-	procGetWindowTextLen    = moduser32.NewProc("GetWindowTextLengthW")
 )
-
-// WindowIsForeground 判断当前控制台/终端窗口是否处于前台。
-//
-// 判定策略（按可靠性排序，任一命中即视为前台）:
-//  1. GetConsoleWindow() == 前台窗口（传统 conhost 场景）
-//  2. 前台窗口的 PID 沿本进程父链可达（常规场景）
-//  3. 前台窗口标题含 "trainer"（忽略大小写，Windows Terminal 等宿主兜底：
-//     标签标题通常是程序名/路径，如 "GoTrainer.exe"、"OriTrainer — 版本选择"）
-//
-// 注意: 三条策略在部分宿主下可能全部失败（例如 Windows 11 把 Windows
-// Terminal 设为默认终端时，GetConsoleWindow 返回的是隐藏的 ConPTY 窗口，
-// 且父进程链不经过终端进程）。调用方不应把它当作唯一开关，见 main.go
-// 的 uiKeysAllowed。
-func WindowIsForeground() bool {
-	fg, _, _ := procGetForegroundWindow.Call()
-	if fg == 0 {
-		return false
-	}
-	cw, _, _ := procGetConsoleWindow.Call()
-	if cw != 0 && fg == cw {
-		return true
-	}
-
-	// 策略 2: PID 父链
-	var fgPid uint32
-	procGetWindowThreadProc.Call(fg, uintptr(unsafe.Pointer(&fgPid)), 0, 0)
-	if fgPid != 0 {
-		me := uint32(os.Getpid())
-		if fgPid == me {
-			return true
-		}
-		cur := me
-		for i := 0; i < 8; i++ {
-			parent := processParentPid(cur)
-			if parent == 0 || parent == cur {
-				break
-			}
-			if parent == fgPid {
-				return true
-			}
-			cur = parent
-		}
-	}
-
-	// 策略 3: 窗口标题兜底（忽略大小写，兼容 GoTrainer / OriTrainer 两种命名）
-	return windowTitleContains(fg, "trainer")
-}
-
-// windowTitleContains 判断窗口标题是否包含指定子串（大小写不敏感，UTF-16）。
-func windowTitleContains(hwnd uintptr, sub string) bool {
-	length, _, _ := procGetWindowTextLen.Call(hwnd)
-	if length == 0 {
-		return false
-	}
-	buf := make([]uint16, length+1)
-	procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
-	title := strings.ToLower(syscall.UTF16ToString(buf))
-	return strings.Contains(title, strings.ToLower(sub))
-}
 
 // ---------- 游戏前台判定 ----------
 
@@ -349,8 +285,8 @@ func refreshGamePids(names []string) {
 
 // GameFocusedAny 前台窗口是否属于任一指定进程名的进程。
 //
-// 用于"游戏在前台时抑制修改器界面按键"——这是唯一必须可靠判定的场景：
-// 游戏内按 ESC（打开暂停菜单）绝不能被误当成修改器的"返回/退出"。
+// 仅用作控制台输入不可用时的兜底（见 main.go 的 uiKeys 状态函数）:
+// 控制台输入缓冲只在窗口有焦点时才收到事件，正常情况下无需此判定。
 func GameFocusedAny(procNames ...string) bool {
 	fg, _, _ := procGetForegroundWindow.Call()
 	if fg == 0 {
@@ -365,28 +301,4 @@ func GameFocusedAny(procNames ...string) bool {
 	gamePidMu.Lock()
 	defer gamePidMu.Unlock()
 	return gamePidSet[fgPid]
-}
-
-// processParentPid 返回指定进程的父进程 PID（取不到返回 0）。
-func processParentPid(pid uint32) uint32 {
-	snapshot, err := syscall.CreateToolhelp32Snapshot(syscall.TH32CS_SNAPPROCESS, 0)
-	if err != nil {
-		return 0
-	}
-	defer syscall.CloseHandle(snapshot)
-
-	var entry syscall.ProcessEntry32
-	entry.Size = uint32(unsafe.Sizeof(entry))
-	if err := syscall.Process32First(snapshot, &entry); err != nil {
-		return 0
-	}
-	for {
-		if entry.ProcessID == pid {
-			return entry.ParentProcessID
-		}
-		if err := syscall.Process32Next(snapshot, &entry); err != nil {
-			break
-		}
-	}
-	return 0
 }

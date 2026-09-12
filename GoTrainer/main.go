@@ -1,5 +1,12 @@
 // OriTrainer (Go) — 奥日与迷失森林 双版本修改器（原版 + 终极版）。
-// 纯标准库实现: Windows console ANSI TUI + GetAsyncKeyState 全局热键。
+// 纯标准库实现: Windows console ANSI TUI。
+//
+// 按键模型（两条规则，互不干扰）:
+//  1. 界面按键（↑↓/回车/ESC/F1/HOME/END）读**控制台输入事件**。控制台
+//     输入缓冲只在本窗口拥有键盘焦点时才会收到事件，因此天然只在
+//     修改器前台时响应，无需猜测窗口归属。
+//  2. 功能热键（小键盘 1-9/0、Ctrl+小键盘）用 GetAsyncKeyState 全局轮询，
+//     只要修改器进程在运行就生效，前后台无关。
 package main
 
 import (
@@ -27,6 +34,8 @@ var (
 	pSetMode  = k32.NewProc("SetConsoleMode")
 	pSetCur   = k32.NewProc("SetConsoleCursorPosition")
 	pSetTitle = k32.NewProc("SetConsoleTitleW")
+	pReadCI   = k32.NewProc("ReadConsoleInputW")
+	pCreateW  = k32.NewProc("CreateFileW")
 )
 
 const stdOutputHandle = ^uintptr(10) // STD_OUTPUT_HANDLE = (DWORD)-11
@@ -39,12 +48,121 @@ func init() {
 	var mode uint32
 	pGetMode.Call(stdoutHandle, uintptr(unsafe.Pointer(&mode)))
 	pSetMode.Call(stdoutHandle, uintptr(mode|0x0004))
-	// 启动即设置标题: 版本选择界面还没有会话标题，而前台判定的兜底
-	// 策略依赖标题包含 "trainer"，不设置会导致选择界面按键全部失灵。
+	// 启动即设置标题，便于在任务栏/终端标签里识别。
 	if t, err := syscall.UTF16PtrFromString("OriTrainer — 版本选择"); err == nil {
 		pSetTitle.Call(uintptr(unsafe.Pointer(t)))
 	}
 }
+
+// ---------- 控制台输入（界面按键的唯一来源） ----------
+
+// INPUT_RECORD / KEY_EVENT_RECORD（x86/x64 同布局，20 字节）。
+type keyEventRecord struct {
+	KeyDown int32
+	Repeat  uint16
+	VK      uint16
+	Scan    uint16
+	Char    uint16
+	State   uint32
+}
+
+type inputRecord struct {
+	Type uint16
+	_    uint16
+	Key  keyEventRecord
+}
+
+const inputRecordKeyEvent = 1
+
+// consoleKeys 每轮从控制台输入缓冲读取按键事件。
+//
+// 控制台只在拥有键盘焦点时才会收到事件，所以这里读到的按键天然
+// 等价于"修改器窗口在前台"——比窗口标题/父进程链等启发式可靠得多
+// （Windows Terminal 默认终端下 GetConsoleWindow 返回隐藏的 ConPTY
+// 窗口、父链也不经过终端进程，那些启发式曾导致界面按键全部失灵）。
+type consoleKeys struct {
+	handle uintptr
+	recs   []inputRecord
+	press  map[int]bool // 本轮采样到的按下事件
+	ok     bool
+}
+
+const (
+	ciEnableProcessedInput = 0x0001
+	ciEnableLineInput      = 0x0002
+	ciEnableEchoInput      = 0x0004
+	ciEnableWindowInput    = 0x0008
+	ciEnableQuickEdit      = 0x0040
+	ciEnableExtendedFlags  = 0x0080
+)
+
+func newConsoleKeys() *consoleKeys {
+	c := &consoleKeys{
+		recs:  make([]inputRecord, 32),
+		press: make(map[int]bool),
+	}
+	// 优先直接打开控制台输入缓冲 CONIN$: 即使标准输入被重定向
+	// （某些启动器/脚本会这么做），界面按键也照常工作。
+	if t, err := syscall.UTF16PtrFromString("CONIN$"); err == nil {
+		h, _, _ := pCreateW.Call(uintptr(unsafe.Pointer(t)),
+			0xC0000000 /*GENERIC_READ|GENERIC_WRITE*/, 0x3 /*共享读写*/, 0, 3 /*OPEN_EXISTING*/, 0, 0)
+		if h != 0 && h != ^uintptr(0) {
+			c.handle = h
+		}
+	}
+	if c.handle == 0 {
+		h, _, _ := pStdout.Call(^uintptr(10)) // STD_INPUT_HANDLE = (DWORD)-10
+		if h == 0 || h == ^uintptr(0) {
+			return c
+		}
+		c.handle = h
+	}
+	var mode uint32
+	if r, _, _ := pGetMode.Call(c.handle, uintptr(unsafe.Pointer(&mode))); r == 0 {
+		c.handle = 0 // 不是控制台输入缓冲（被重定向且无控制台）
+		return c
+	}
+	// 关闭行输入/回显（没有人按行读，避免缓冲被行编辑器吃掉），保留
+	// 处理输入（Ctrl+C 语义不变）与快速编辑（保留鼠标选择文本），
+	// 打开窗口输入（否则收不到 F1/方向键等非字符键）。
+	const want = ciEnableProcessedInput | ciEnableWindowInput |
+		ciEnableQuickEdit | ciEnableExtendedFlags
+	pSetMode.Call(c.handle, uintptr(want))
+	c.ok = true
+	return c
+}
+
+// poll 读取并清空本轮按键事件。只记录按下事件；
+// 长按产生的重复事件也只是持续置位，边沿检测仍只触发一次。
+func (c *consoleKeys) poll() {
+	for k := range c.press {
+		delete(c.press, k)
+	}
+	if c.handle == 0 {
+		return
+	}
+	var read uint32
+	r1, _, _ := pReadCI.Call(c.handle, uintptr(unsafe.Pointer(&c.recs[0])),
+		uintptr(len(c.recs)), uintptr(unsafe.Pointer(&read)))
+	if r1 == 0 {
+		return
+	}
+	for i := 0; i < int(read); i++ {
+		rec := &c.recs[i]
+		if rec.Type != inputRecordKeyEvent {
+			continue
+		}
+		if rec.Key.KeyDown != 0 {
+			c.press[int(rec.Key.VK)] = true
+		}
+	}
+}
+
+// available 控制台输入是否可用（不可用时界面按键退化为全局热键 + 游戏前台抑制）。
+func (c *consoleKeys) available() bool { return c.ok }
+
+// pressed 本轮是否收到该虚拟键的按下事件。
+func (c *consoleKeys) pressed(vk int) bool { return c.press[vk] }
 
 func writeConsole(s string) {
 	u16 := utf16.Encode([]rune(s))
@@ -77,14 +195,20 @@ const (
 	cCyan  = "\x1b[96m"
 )
 
-// ---------- 热键（边沿检测） ----------
+// ---------- 按键（边沿检测） ----------
 
-type keyEdges struct{ prev map[int]bool }
+// keyEdges 把"当前是否按下"折叠成"这一轮刚按下"。
+type keyEdges struct {
+	prev  map[int]bool
+	state func(int) bool
+}
 
-func newKeyEdges() *keyEdges { return &keyEdges{prev: make(map[int]bool)} }
+func newKeyEdges(state func(int) bool) *keyEdges {
+	return &keyEdges{prev: make(map[int]bool), state: state}
+}
 
 func (e *keyEdges) pressed(vk int) bool {
-	down := core.GetAsyncKeyDown(vk)
+	down := e.state(vk)
 	was := e.prev[vk]
 	e.prev[vk] = down
 	return down && !was
@@ -224,48 +348,6 @@ func toggleFeature(a *app, s *session, f *ori.Feature) {
 	}
 }
 
-// 前台判定模式: 0=校准中 1=正向判定可用 2=不可用
-var (
-	fgMode    int32
-	fgMissCnt int32
-)
-
-// uiKeysAllowed 界面/破坏性按键（选择、ESC、END、HOME 等）当前是否应当生效。
-//
-// 两条铁律:
-//  1. 游戏窗口在前台 → 一律不响应。真正必须防住的只有这一种情况——
-//     在游戏里按 ESC（打开暂停菜单）被误当成修改器的"返回版本选择"，
-//     再按一次直接退出程序。
-//  2. 其余情况尽量要求修改器窗口在前台，避免在别的窗口（比如编辑器里
-//     打字按到回车/ESC）误触发功能开关或退出。
-//
-// 但部分终端宿主拿不到自身窗口（Windows 11 默认终端为 Windows Terminal 时，
-// GetConsoleWindow 返回隐藏的 ConPTY 窗口、父进程链也不经过终端进程），
-// 正向判定会永远失败——若把失败当成"不在前台"，版本选择界面就会完全
-// 无法操作（用户实测：刚启动方向键/回车/ESC 全部失灵）。
-// 因此启动后先校准约 2 秒：正向判定命中过 → 长期启用正向判定；
-// 从未命中 → 退化为"只要游戏不在前台就生效"。
-func uiKeysAllowed() bool {
-	if core.GameFocusedAny(ori.Profiles[ori.Vanilla].ProcessName, ori.Profiles[ori.Definitive].ProcessName) {
-		return false
-	}
-	switch atomic.LoadInt32(&fgMode) {
-	case 2:
-		return true
-	case 1:
-		return core.WindowIsForeground()
-	default:
-		if core.WindowIsForeground() {
-			atomic.StoreInt32(&fgMode, 1)
-			return true
-		}
-		if atomic.AddInt32(&fgMissCnt, 1) >= 25 { // ~2 秒（80ms 一轮）
-			atomic.StoreInt32(&fgMode, 2)
-		}
-		return true
-	}
-}
-
 func (a *app) setMsg(s string) { a.msg.Store(s) }
 func (a *app) getMsg() string  { s, _ := a.msg.Load().(string); return s }
 
@@ -359,14 +441,12 @@ func renderTrainer(a *app, s *session) {
 		b.WriteString(cYel + "  [帮助] 冻结=激活时捕获当前值并持续写回; 进入存档后生效; 全局热键免切窗\n" + cReset)
 	}
 
-	// 前台导航: 与按键判定保持一致（见 uiKeysAllowed 的说明）
-	fg := uiKeysAllowed()
-
-	// 统一渲染导航项（小键盘组 → 一命保护 → 其余 Ctrl 组）
+	// 导航光标始终显示: 界面按键来自控制台输入，仅在本窗口有焦点时才生效，
+	// 因此无法（也无需）提前判断焦点状态。
 	rows := navList(s)
 	for i, e := range rows {
 		cursor := "  "
-		if fg && a.navCursor == i {
+		if a.navCursor == i {
 			cursor = cCyan + "▶" + cReset + " "
 		}
 		box := cWhite + "[ ]" + cReset
@@ -383,13 +463,8 @@ func renderTrainer(a *app, s *session) {
 	}
 
 	b.WriteString(cBox + "  ────────────────────────────────────────────────────────\n" + cReset)
-	if fg {
-		b.WriteString("  " + cCyan + "前台模式" + cReset + ": " + cWhite + "↑↓" + cReset + " 选择   " +
-			cWhite + "回车/空格" + cReset + " 开关   |   " +
-			cWhite + "小键盘 1-9/0" + cReset + " 前 10 项   " + cWhite + "Ctrl+小键盘" + cReset + " 后 6 项\n")
-	} else {
-		b.WriteString("  " + cDim + "全局热键: 小键盘 1-9/0（前 10 项）· Ctrl+小键盘 1-6（后 6 项）（切到本窗口可用 ↑↓ 导航）" + cReset + "\n")
-	}
+	b.WriteString("  " + cDim + "本窗口内: ↑↓ 选择 · 回车/空格 开关   |   " + cReset +
+		cWhite + "小键盘 1-9/0" + cReset + " 前 10 项   " + cWhite + "Ctrl+小键盘" + cReset + " 后 6 项（全局，免切窗）\n")
 	b.WriteString("  " + cWhite + "HOME" + cReset + " 全关   " + cWhite + "F12" + cReset + " 重扫   " +
 		cWhite + "F1" + cReset + " 帮助   " + cWhite + "ESC" + cReset + " 返回   " + cWhite + "END" + cReset + " 退出\n")
 	b.WriteString("  " + cDim + a.getMsg() + cReset + "\n")
@@ -475,7 +550,20 @@ func (a *app) engineLoop(s *session) {
 func main() {
 	a := &app{}
 	a.setMsg("")
-	keys := newKeyEdges()
+	ck := newConsoleKeys()
+	// 界面按键: 控制台输入事件（仅本窗口有焦点时才有事件）。
+	// 若控制台输入不可用（标准输入被重定向等），退化为"全局热键 + 游戏前台抑制"。
+	uiKeys := newKeyEdges(func(vk int) bool {
+		if ck.available() {
+			return ck.pressed(vk)
+		}
+		if core.GameFocusedAny(ori.Profiles[ori.Vanilla].ProcessName, ori.Profiles[ori.Definitive].ProcessName) {
+			return false
+		}
+		return core.GetAsyncKeyDown(vk)
+	})
+	// 功能热键: 全局轮询，修改器进程存活期间始终生效。
+	sysKeys := newKeyEdges(func(vk int) bool { return core.GetAsyncKeyDown(vk) })
 
 	const (
 		vkUp     = 0x26
@@ -492,33 +580,29 @@ func main() {
 	)
 
 	for {
+		ck.poll()
+
 		if !a.chosen {
-			// 界面按键: 只要游戏窗口不在前台就响应。
-			// （历史教训见 uiKeysAllowed —— 以"修改器在前台"为条件会让
-			// 部分终端宿主下选择界面完全无法操作。）
-			fgSel := uiKeysAllowed()
-			selUp := keys.pressed(vkUp) || keys.pressed(vkW)
-			selDown := keys.pressed(vkDown) || keys.pressed(vkS)
-			selRet := keys.pressed(vkReturn)
-			selEsc := keys.pressed(vkEscape)
-			if fgSel {
-				if selUp {
-					a.selCursor = (a.selCursor + 1) % 2
+			selUp := uiKeys.pressed(vkUp) || uiKeys.pressed(vkW)
+			selDown := uiKeys.pressed(vkDown) || uiKeys.pressed(vkS)
+			selRet := uiKeys.pressed(vkReturn)
+			selEsc := uiKeys.pressed(vkEscape)
+			if selUp {
+				a.selCursor = (a.selCursor + 1) % 2
+			}
+			if selDown {
+				a.selCursor = (a.selCursor + 1) % 2
+			}
+			if selRet {
+				prof := ori.Profiles[ori.Vanilla]
+				if a.selCursor == 1 {
+					prof = ori.Profiles[ori.Definitive]
 				}
-				if selDown {
-					a.selCursor = (a.selCursor + 1) % 2
-				}
-				if selRet {
-					prof := ori.Profiles[ori.Vanilla]
-					if a.selCursor == 1 {
-						prof = ori.Profiles[ori.Definitive]
-					}
-					a.choose(prof)
-				}
-				if selEsc {
-					fmt.Println("\n退出。")
-					os.Exit(0)
-				}
+				a.choose(prof)
+			}
+			if selEsc {
+				fmt.Println("\n退出。")
+				os.Exit(0)
 			}
 			renderSelector(a)
 			time.Sleep(80 * time.Millisecond)
@@ -531,27 +615,24 @@ func main() {
 			continue
 		}
 
-		// 窗口前台状态: 游戏窗口在前台时抑制所有界面按键（含 ESC/END/HOME）。
-		fg := uiKeysAllowed()
+		// 界面按键（控制台输入）: 只有修改器窗口有焦点时才有事件，
+		// 因此无需再做前台判断。先统一采样，再依次处理。
+		f1Pressed := uiKeys.pressed(vkF1)
+		endPressed := uiKeys.pressed(vkEnd)
+		escPressed := uiKeys.pressed(vkEscape)
+		homePressed := uiKeys.pressed(vkHome)
+		f12Pressed := uiKeys.pressed(vkF12)
 
-		// 注意: 先统一采样按键边沿，再按前台状态决定是否响应，
-		// 保证 prev 状态每轮都更新，避免切回窗口时误触发。
-		f1Pressed := keys.pressed(vkF1)
-		endPressed := keys.pressed(vkEnd)
-		escPressed := keys.pressed(vkEscape)
-		homePressed := keys.pressed(vkHome)
-		f12Pressed := keys.pressed(vkF12)
-
-		if fg && f1Pressed {
+		if f1Pressed {
 			a.help.Store(!a.help.Load())
 		}
-		if fg && endPressed {
+		if endPressed {
 			ori.DeactivateAll(s.feats, s.r)
 			s.closeProc()
 			fmt.Println("\nOriTrainer 已退出。")
 			os.Exit(0)
 		}
-		if fg && escPressed {
+		if escPressed {
 			ori.DeactivateAll(s.feats, s.r)
 			s.closeProc()
 			a.mu.Lock()
@@ -562,7 +643,7 @@ func main() {
 			time.Sleep(200 * time.Millisecond)
 			continue
 		}
-		if fg && homePressed {
+		if homePressed {
 			ori.DeactivateAll(s.feats, s.r)
 			a.setMsg("已关闭全部功能")
 		}
@@ -577,9 +658,9 @@ func main() {
 		const vkControl = 0x11
 		ctrlDown := core.GetAsyncKeyDown(vkControl)
 
-		// 小键盘 1-9 是 0x61-0x69，小键盘 0 是 0x60
+		// 小键盘 1-9 是 0x61-0x69，小键盘 0 是 0x60（全局热键，与焦点无关）
 		for i := 0; i < 9; i++ {
-			if keys.pressed(0x61 + i) {
+			if sysKeys.pressed(0x61 + i) {
 				digit := i + 1
 				hit := false
 				for _, f := range s.feats {
@@ -594,7 +675,7 @@ func main() {
 				}
 			}
 		}
-		if keys.pressed(0x60) {
+		if sysKeys.pressed(0x60) {
 			for _, f := range s.feats {
 				if f.Digit == 0 && f.NeedCtrl == ctrlDown {
 					toggleFeature(a, s, f)
@@ -604,22 +685,20 @@ func main() {
 
 		// ---- 前台导航：用 ↑↓ 选择 + 回车/空格切换 ----
 		// 供没有小键盘的键盘使用（全局热键仍可用）。
-		// 注意这里必须用与界面按键一致的判定（fg），不能用
-		// core.WindowIsForeground()：部分终端宿主下后者永远为假，
-		// 会导致方向键/回车导航失效。
-		if fg {
+		// 与其他界面按键一样走控制台输入，仅在修改器有焦点时生效。
+		{
 			n := len(navList(s))
-			if keys.pressed(vkUp) || keys.pressed(vkW) {
+			if uiKeys.pressed(vkUp) || uiKeys.pressed(vkW) {
 				if n > 0 {
 					a.navCursor = (a.navCursor - 1 + n) % n
 				}
 			}
-			if keys.pressed(vkDown) || keys.pressed(vkS) {
+			if uiKeys.pressed(vkDown) || uiKeys.pressed(vkS) {
 				if n > 0 {
 					a.navCursor = (a.navCursor + 1) % n
 				}
 			}
-			if keys.pressed(vkReturn) || keys.pressed(vkSpace) {
+			if uiKeys.pressed(vkReturn) || uiKeys.pressed(vkSpace) {
 				a.navToggle(s, a.navCursor)
 			}
 		}
