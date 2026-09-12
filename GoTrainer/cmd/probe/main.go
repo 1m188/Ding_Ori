@@ -146,6 +146,8 @@ func main() {
 		cmdOneScan(p)
 	case "allrefs":
 		cmdAllRefs(p)
+	case "diffstrict":
+		cmdDiffStrict(p)
 	case "strref":
 		cmdStrRef(p)
 	case "fields2":
@@ -2088,6 +2090,53 @@ func parseHex(s string) uint64 {
 	s = strings.TrimPrefix(strings.TrimPrefix(s, "0x"), "0X")
 	n, _ := strconv.ParseUint(s, 16, 64)
 	return n
+}
+
+// cmdDiffStrict 严格签名扫描 DifficultyController 活体实例。
+//
+// 判据（全部满足）: classOf(obj)=="DifficultyController"、
+// +0x18 Difficulty ∈ [0,3]、+0x1C LowestDifficulty ∈ [0,3]、
+// +0x08 OnDifficultyChanged 非空（构造已完成）。
+func cmdDiffStrict(p *core.Process) {
+	t0 := time.Now()
+	n := 0
+	for _, r := range normRegions(p.Handle) {
+		if r.Base < 0x40000000 {
+			continue
+		}
+		const chunk = 8 << 20
+		for base := r.Base; base < r.Base+r.Size; base += chunk {
+			sz := uint64(chunk)
+			if r.Base+r.Size-base < sz {
+				sz = r.Base + r.Size - base
+			}
+			buf := make([]byte, sz)
+			if !p.ReadBytes(uint32(base), buf) {
+				continue
+			}
+			for off := 0; off+0x24 <= int(sz); off += 4 {
+				d1 := int32(u32atb(buf, off+0x18))
+				if d1 < 0 || d1 > 3 {
+					continue
+				}
+				d2 := int32(u32atb(buf, off+0x1C))
+				if d2 < 0 || d2 > 3 {
+					continue
+				}
+				if u32atb(buf, off+8) == 0 {
+					continue
+				}
+				obj := uint32(base) + uint32(off)
+				cn, _, ok := classOf(p, obj)
+				if !ok {
+					continue
+				}
+				n++
+				fmt.Printf("  ★ obj=0x%08X class=%q Difficulty=%d Lowest=%d\n", obj, cn, d1, d2)
+			}
+		}
+	}
+	fmt.Printf("diffstrict 命中 %d 个 [%.1fs]\n", n, time.Since(t0).Seconds())
 }
 
 // cmdAllRefs 全地址带查找指向指定地址/值的槽位（不限低区）。
