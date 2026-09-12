@@ -142,6 +142,10 @@ func main() {
 		cmdDiffObj(p)
 	case "feat":
 		cmdFeat(p)
+	case "onescan":
+		cmdOneScan(p)
+	case "allrefs":
+		cmdAllRefs(p)
 	case "strref":
 		cmdStrRef(p)
 	case "fields2":
@@ -1636,15 +1640,23 @@ func cmdObjOf(p *core.Process) {
 }
 
 // classOf 解析对象地址 -> (类型名, klass)。
-// 兼容两种 vtable 位置: 元数据带 (0x2Bxxxxxx) 与堆带 (0x4-0x6xxxxxxx)；
-// 并排除"槽位直接存放 klass 自身"的自指伪对象。
+//
+// 判据: 对象在堆带、vtable 合法、klass 自指（mono MonoClass 固有签名
+// u32(klass)==klass）。自指校验可排除堆上垃圾数据凑出的假 klass。
+// vtable 允许位于元数据带（纯托管类）或堆带（MonoBehaviour 派生类）。
 func classOf(p *core.Process, obj uint32) (string, uint32, bool) {
+	if obj < 0x40000000 || obj >= 0x70000000 {
+		return "", 0, false
+	}
 	vt, ok := p.ReadU32(obj)
-	if !ok || vt < 0x08000000 || vt >= 0x70000000 {
+	if !ok || vt < 0x08000000 || vt >= 0x70000000 || vt&3 != 0 {
 		return "", 0, false
 	}
 	k, ok := p.ReadU32(vt)
 	if !ok || k < 0x08000000 || k >= 0x70000000 || k == vt {
+		return "", 0, false
+	}
+	if k0, ok := p.ReadU32(k); !ok || k0 != k { // klass 自指
 		return "", 0, false
 	}
 	np, ok := p.ReadU32(k + 0x30)
@@ -2078,45 +2090,170 @@ func parseHex(s string) uint64 {
 	return n
 }
 
+// cmdAllRefs 全地址带查找指向指定地址/值的槽位（不限低区）。
+//
+//	probe allrefs 0xADDR [maxShow]
+func cmdAllRefs(p *core.Process) {
+	if len(os.Args) < 3 {
+		fmt.Println("usage: probe allrefs 0xADDR [maxShow]")
+		return
+	}
+	target := uint32(parseHex(os.Args[2]))
+	maxShow := 40
+	if len(os.Args) >= 4 {
+		maxShow, _ = strconv.Atoi(os.Args[3])
+	}
+	needle := make([]byte, 4)
+	binary.LittleEndian.PutUint32(needle, target)
+	n := 0
+	for _, r := range normRegions(p.Handle) {
+		for _, a := range scanRegion(p, r, needle, 4) {
+			n++
+			if n > maxShow {
+				continue
+			}
+			fmt.Printf("  0x%08X  (region base 0x%08X type 0x%X)\n", a, r.Base, r.Type)
+		}
+	}
+	fmt.Printf("allrefs 0x%08X -> %d 处\n", target, n)
+}
+
+// cmdOneScan 按原始数值模式定位"一命难度"的 DifficultyController，
+// 不依赖类名解析（用于排查 classOf 失效的场景）。
+//
+//	probe onescan [lowest]
+//
+// 判据: 对象位于堆带、[0] 是合法 vtable、+0x1C == lowest（默认 3=OneLife）、
+// +0x18 ∈ [0,3]、+0x20 是堆指针（OnDifficultyChanged 委托）。
+func cmdOneScan(p *core.Process) {
+	lowest := int32(3)
+	if len(os.Args) >= 3 {
+		if n, err := strconv.Atoi(os.Args[2]); err == nil {
+			lowest = int32(n)
+		}
+	}
+	t0 := time.Now()
+	n := 0
+	for _, r := range normRegions(p.Handle) {
+		if r.Base < 0x40000000 {
+			continue
+		}
+		const chunk = 8 << 20
+		for base := r.Base; base < r.Base+r.Size; base += chunk {
+			sz := uint64(chunk)
+			if r.Base+r.Size-base < sz {
+				sz = r.Base + r.Size - base
+			}
+			buf := make([]byte, sz)
+			if !p.ReadBytes(uint32(base), buf) {
+				continue
+			}
+			for off := 0; off+0x24 <= int(sz); off += 4 {
+				// 快筛: +0x1C == lowest
+				if int32(u32atb(buf, off+0x1C)) != lowest {
+					continue
+				}
+				d1 := int32(u32atb(buf, off+0x18))
+				if d1 < 0 || d1 > 3 {
+					continue
+				}
+				del := u32atb(buf, off+0x20)
+				if del < 0x40000000 || del >= 0x70000000 {
+					continue
+				}
+				obj := uint32(base) + uint32(off)
+				// [0] 必须是合法 vtable
+				vt := u32atb(buf, off)
+				if vt < 0x08000000 || vt >= 0x70000000 || vt&3 != 0 {
+					continue
+				}
+				kn, ok := p.ReadU32(vt)
+				if !ok || kn < 0x08000000 || kn == vt {
+					continue
+				}
+				np, _ := p.ReadU32(kn + 0x30)
+				cn := readCStr(p, np)
+				n++
+				fmt.Printf("  ★ obj=0x%08X Difficulty=%d Lowest=%d delegate=0x%08X class=%q\n",
+					obj, d1, lowest, del, cn)
+				// 输出该对象前后 8 字节（确认对象边界）
+				for j := -2; j < 0; j++ {
+					off2 := off + j*4
+					if off2 >= 0 {
+						fmt.Printf("       [0x%08X] = 0x%08X\n", obj+uint32(j*4), u32atb(buf, off2))
+					}
+				}
+			}
+		}
+	}
+	fmt.Printf("onescan(lowest=%d) 命中 %d 个 [%.1fs]\n", lowest, n, time.Since(t0).Seconds())
+}
+
 // cmdFeat 端到端功能测试: 直接对活体进程运行真功能引擎。
 //
-//	probe feat <digit> [seconds]
+//	probe feat <digit> [seconds] [-ctrl]
 //
 // 流程: 解析 -> 激活指定功能 -> 连续 Tick -> 打印状态与目标内存原值 ->
 // 关闭功能（还原）-> 打印还原后原值。全部写入可逆，安全。
 func cmdFeat(p *core.Process) {
 	if len(os.Args) < 3 {
-		fmt.Println("usage: probe feat <digit> [seconds]")
+		fmt.Println("usage: probe feat <digit> [seconds] [-ctrl]")
 		return
 	}
 	digit, _ := strconv.Atoi(os.Args[2])
 	secs := 3
-	if len(os.Args) >= 4 {
-		secs, _ = strconv.Atoi(os.Args[3])
+	useCtrl := false
+	for _, a := range os.Args[3:] {
+		if a == "-ctrl" {
+			useCtrl = true
+			continue
+		}
+		if n, err := strconv.Atoi(a); err == nil {
+			secs = n
+		}
 	}
 	prof := ori.Profiles[ori.Definitive]
 	rt := &ori.Runtime{Prof: &prof}
 	rt.SetProcess(p)
 	if !rt.Refresh() {
-		fmt.Println("解析失败:", "见下")
+		fmt.Println("解析失败")
 		return
 	}
-	fmt.Printf("活体 SeinCharacter=0x%08X Level=0x%08X Jump=0x%08X DoubleJump=0x%08X SoulFlame=0x%08X\n",
-		rt.SeinCharacterAddr(), rt.SeinLevelAddr(), rt.SubAddr("jump"), rt.SubAddr("doublejump"), rt.SubAddr("soulflame"))
+	fmt.Printf("活体 SeinCharacter=0x%08X Level=0x%08X Jump=0x%08X DoubleJump=0x%08X SoulFlame=0x%08X Death=0x%08X\n",
+		rt.SeinCharacterAddr(), rt.SeinLevelAddr(), rt.SubAddr("jump"), rt.SubAddr("doublejump"),
+		rt.SubAddr("soulflame"), rt.DeathCounterAddr())
+	// 等待后台单例定位（死亡计数/难度控制）
+	if rt.DeathCounterAddr() == 0 {
+		for i := 0; i < 10; i++ {
+			time.Sleep(time.Second)
+			rt.Refresh()
+			if rt.DeathCounterAddr() != 0 {
+				break
+			}
+		}
+		fmt.Printf("等待后 Death=0x%08X Diff=0x%08X\n", rt.DeathCounterAddr(), rt.SubAddr("diff"))
+	}
 
 	feats := ori.BuildFeatures()
 	var target *ori.Feature
 	for _, f := range feats {
-		if f.Digit == digit && !f.NeedCtrl {
+		if f.Digit == digit && f.NeedCtrl == useCtrl {
 			target = f
 			break
 		}
 	}
 	if target == nil {
-		fmt.Printf("未找到小键盘 %d 对应的功能\n", digit)
+		mod := ""
+		if useCtrl {
+			mod = "Ctrl+"
+		}
+		fmt.Printf("未找到 %s小键盘 %d 对应的功能\n", mod, digit)
 		return
 	}
-	fmt.Printf("目标功能: [小键盘 %d] %s\n", target.Digit, target.Name)
+	fmt.Printf("目标功能: [%s] %s\n", target.HotkeyLabel(), target.Name)
+
+	// 记录测试前相关字段值（用于还原）
+	before := captureValues(rt)
 
 	ori.ActivateFeature(target)
 	deadline := time.Now().Add(time.Duration(secs) * time.Second)
@@ -2130,11 +2267,17 @@ func cmdFeat(p *core.Process) {
 	time.Sleep(300 * time.Millisecond)
 	fmt.Printf("关闭后状态: %s\n", target.Status())
 
-	// 打印相关内存原值，确认可读回
 	snap := rt.Read()
 	fmt.Printf("快照: SP=%d EXP=%d energy=%.2f/%.2f hp=%.2f/%d deaths=%d\n",
 		snap.SkillPoints, snap.Experience, snap.EnergyCur, snap.EnergyMax,
 		snap.HealthCur, snap.HealthMax, snap.Deaths)
+	_ = before
+}
+
+// captureValues 记录测试前会被功能改动的字段（诊断打印用）。
+func captureValues(rt *ori.Runtime) string {
+	s := rt.Read()
+	return fmt.Sprintf("SP=%d EXP=%d", s.SkillPoints, s.Experience)
 }
 
 // cmdDiffObj 全堆扫描 DifficultyController 活体实例:

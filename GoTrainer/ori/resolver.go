@@ -175,13 +175,16 @@ func isHeapPtr(v uint32) bool {
 //
 // 对象布局: [0]=vtable -> klass, klass+0x30 = 类型名字符串指针。
 //
-// 关键约束: 对象本身必须位于堆带（0x40000000-0x70000000）。mono 的类
-// 元数据块（0x2A-0x2B 段）内部含指向自身 klass 的指针，若不排除，
-// 会把元数据块误判成对象实例（实测踩到过）。
-//
-// 注意 vtable 本身**不能**限制在堆带: MonoBehaviour 派生类的 vtable
-// 在堆上（如 SeinCharacter 的 0x529CC60C），而纯托管类的 vtable 在
-// 元数据带（如 DifficultyController 的 0x2B4D7A30），两者都合法。
+// 判据（逐条实测校准）:
+//  1. 对象本身在堆带（0x40000000-0x70000000）。
+//  2. vtable 是合法指针。注意 vtable 可能位于两处: MonoBehaviour 派生类在
+//     堆带（如 SeinCharacter 的 0x529CC60C），纯托管类在元数据带
+//     （如 DifficultyController 的 0x2B4D7A30）—— 不能用地址带区分。
+//  3. **klass 必须自指**: u32(klass) == klass。这是 mono MonoClass 的
+//     固有签名（element_class/cast_class 指向自身），已验证 SeinCharacter、
+//     SeinEnergy、SeinLevel、SeinDeathCounter、DifficultyController 五类全部满足；
+//     而堆上垃圾数据偶然凑出的"假 klass"几乎不可能满足，实测用它排除了
+//     所有假阳性。
 func (r *Runtime) classOf(p *core.Process, obj uint32) (string, uint32, bool) {
 	if !isHeapPtr(obj) {
 		return "", 0, false
@@ -192,6 +195,10 @@ func (r *Runtime) classOf(p *core.Process, obj uint32) (string, uint32, bool) {
 	}
 	k, ok := p.ReadU32(vt)
 	if !ok || k < 0x08000000 || k >= 0x70000000 || k == vt {
+		return "", 0, false
+	}
+	// klass 自指校验（mono MonoClass 固有签名）
+	if k0, ok := p.ReadU32(k); !ok || k0 != k {
 		return "", 0, false
 	}
 	np, ok := p.ReadU32(k + 0x30)
@@ -520,8 +527,10 @@ func scanLowBandAux(p *core.Process, sein uint32) (death, diff uint32) {
 		vk, ok := p.ReadU32(vt)
 		nm := ""
 		if ok && vk >= 0x08000000 && vk != vt {
-			if np, ok2 := p.ReadU32(vk + 0x30); ok2 && np >= 0x08000000 {
-				nm = readIdent(p, np)
+			if k0, ok3 := p.ReadU32(vk); ok3 && k0 == vk { // klass 自指
+				if np, ok2 := p.ReadU32(vk + 0x30); ok2 && np >= 0x08000000 {
+					nm = readIdent(p, np)
+				}
 			}
 		}
 		cache[vt] = nm

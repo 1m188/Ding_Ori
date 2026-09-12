@@ -206,6 +206,7 @@ func (a *app) choose(prof ori.Profile) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	s := &session{prof: prof, r: &ori.Runtime{}, feats: ori.BuildFeatures()}
+	ori.SetActiveRuntime(s.r) // 供经验倍率单选互斥还原数值
 	a.sess = s
 	a.chosen = true
 	if p, err := core.Attach(prof.ProcessName); err == nil {

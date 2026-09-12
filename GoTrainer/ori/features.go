@@ -446,14 +446,23 @@ func (o *OneLifeProtect) ResetForNewProcess() {
 
 var (
 	allTickers  []ticker
-	oneLife     = NewOneLifeProtect() // 一命保护（Ctrl+小键盘 3）
-	xpBoostMult atomic.Value          // float32 经验倍率，0/未设置=关闭
-	xpBoostBase atomic.Int32          // 倍率生效时的经验基数
+	oneLife     = NewOneLifeProtect() // 一命保护（Ctrl+小键盘 1）
+	xpBoostBase atomic.Int32          // 经验倍率的"未放大基数"
+	xpBoostLast atomic.Int32          // 上次写回的放大值（检测新获得经验）
 
 	// featureActivators 记录需要自定义激活/关闭副作用的执行器
 	// （如经验倍率的单选逻辑），由 UI 层通过 ActivateFeature/DeactivateFeature 调用。
 	featureActivators = map[*Feature]func(on bool){}
+
+	// activeRuntime 当前会话的 Runtime（单选互斥时需要它来还原基数）。
+	// UI 层在创建会话后调用 SetActiveRuntime 设置。
+	activeRuntime *Runtime
 )
+
+// SetActiveRuntime 由 UI 层在建立会话时调用，供互斥逻辑还原数值。
+func SetActiveRuntime(r *Runtime) {
+	activeRuntime = r
+}
 
 // OneLife 返回一命保护实例。
 func OneLife() *OneLifeProtect { return oneLife }
@@ -472,16 +481,22 @@ func DeactivateFeature(f *Feature, r *Runtime) {
 	if !f.Active() {
 		return
 	}
+	// 可还原型执行器: setFloat（倍率放大）、xpBoostOption（经验倍率）
 	for _, t := range allTickers {
 		if sf, ok := t.(*setFloat); ok && sf.f == f {
 			if r != nil {
-				sf.OnDeactivate(r) // 内部会在还原后清 have
+				sf.OnDeactivate(r)
 			} else {
 				sf.f.have.Store(false)
 			}
-			break
+			goto done
+		}
+		if xb, ok := t.(*xpBoostOption); ok && xb.f == f {
+			xb.OnDeactivate(r)
+			goto done
 		}
 	}
+done:
 	f.SetActive(false)
 	if act, ok := featureActivators[f]; ok {
 		act(false)
@@ -493,7 +508,6 @@ func TickAll(r *Runtime) {
 	for _, t := range allTickers {
 		t.Tick(r)
 	}
-	tickXPBoost(r)
 	oneLife.Tick(r)
 }
 
@@ -506,58 +520,79 @@ func DeactivateAll(fs []*Feature, r *Runtime) {
 		DeactivateFeature(f, r)
 	}
 	oneLife.SetActive(false)
-	xpBoostMult.Store(float32(0))
 	xpBoostBase.Store(0)
+	xpBoostLast.Store(0)
 }
 
-// ---------- 经验倍率（Ctrl+小键盘 5/6/7/8）----------
+// ---------- 经验倍率（Ctrl+小键盘 3/4/5/6）----------
 
 // xpBoostOption 经验倍率选项（单选语义: 激活一个会自动关闭其它倍率）。
+//
+// 语义: "获得经验放大 N 倍"。维护一个"未放大的基数" base：
+//   - 激活时以当前 Experience 为基数；
+//   - 每周期读回 Experience（cur），若 cur > 上次写入值（last），说明玩家
+//     又获得了经验，把增量并入基数（base += cur-last），使新获得的经验
+//     同样被放大；
+//   - 若 cur < last（升级消耗或被游戏改写），重建基数 = cur；
+//   - 目标值 = base × N，持续写回。
+//
+// 关闭时把 base 写回（保留玩家实际获得的经验，去掉放大出来的部分），
+// 与超级跳等"可还原"功能语义一致。
 type xpBoostOption struct {
 	f    *Feature
 	mult float32
 }
 
-// Tick 空实现: 倍率的实际写入由 tickXPBoost 统一处理。
-func (g *xpBoostOption) Tick(r *Runtime) {}
+// Tick 报告状态并驱动倍率写入。
+func (g *xpBoostOption) Tick(r *Runtime) {
+	if !g.f.Active() {
+		return
+	}
+	_, level, _, _, _, _ := r.Addrs()
+	if level == 0 {
+		g.f.setStatus("等待定位…")
+		return
+	}
+	addr := level + OffLevelExperience
+	cur, ok := r.Proc.ReadI32(addr)
+	if !ok {
+		g.f.setStatus("读取失败")
+		return
+	}
 
-// tickXPBoost 维持 Experience = 基数 × 倍率。
-func tickXPBoost(r *Runtime) {
-	m, _ := xpBoostMult.Load().(float32)
-	if m <= 0 {
+	base := xpBoostBase.Load()
+	last := xpBoostLast.Load()
+	switch {
+	case base == 0:
+		base = cur // 首次捕获
+	case cur > last:
+		base += cur - last // 新获得的经验也放大
+	case cur < last:
+		base = cur // 升级消耗/被改写 → 重建
+	}
+	xpBoostBase.Store(base)
+	target := int32(float32(base) * g.mult)
+	if r.Proc.WriteI32(addr, target) {
+		xpBoostLast.Store(target)
+		g.f.setStatus(fmt.Sprintf("已放大 %gx (%d→%d)", g.mult, base, target))
+	} else {
+		g.f.setStatus("写入失败")
+	}
+}
+
+// OnDeactivate 还原为未放大的基数。
+func (g *xpBoostOption) OnDeactivate(r *Runtime) {
+	base := xpBoostBase.Load()
+	xpBoostBase.Store(0)
+	xpBoostLast.Store(0)
+	if r == nil || base == 0 {
 		return
 	}
 	_, level, _, _, _, _ := r.Addrs()
 	if level == 0 {
 		return
 	}
-	addr := level + OffLevelExperience
-	base := xpBoostBase.Load()
-	if base <= 0 {
-		cur, ok := r.Proc.ReadI32(addr)
-		if !ok || cur <= 0 {
-			return
-		}
-		xpBoostBase.Store(cur)
-		base = cur
-	}
-	r.Proc.WriteI32(addr, int32(float32(base)*m))
-}
-
-// SetXPBoost 设置经验倍率（0 = 关闭）。
-func SetXPBoost(mult float32) {
-	xpBoostBase.Store(0) // 重新捕获基数
-	if mult <= 0 {
-		xpBoostMult.Store(float32(0))
-		return
-	}
-	xpBoostMult.Store(mult)
-}
-
-// XPBoostMult 当前经验倍率（UI 显示）。
-func XPBoostMult() float32 {
-	m, _ := xpBoostMult.Load().(float32)
-	return m
+	r.Proc.WriteI32(level+OffLevelExperience, base)
 }
 
 // ---------- 功能表 ----------
@@ -565,8 +600,8 @@ func XPBoostMult() float32 {
 // BuildFeatures 构建功能表（键位对齐风灵月影 DE v1.0 Plus 13）。
 func BuildFeatures() []*Feature {
 	allTickers = nil
-	xpBoostMult.Store(float32(0))
 	xpBoostBase.Store(0)
+	xpBoostLast.Store(0)
 
 	// ---- 字段地址闭包 ----
 	// 注意: 所有闭包一律通过 r.Addrs() 取地址（内部加锁）。
@@ -725,19 +760,18 @@ func BuildFeatures() []*Feature {
 	newXPBoost := func(digit int, mult float32) *Feature {
 		f := NewCtrlFeature(digit, fmt.Sprintf("经验倍率 %.0fx", mult))
 		allTickers = append(allTickers, &xpBoostOption{f: f, mult: mult})
-		// 单选语义: 激活某倍率时关闭其它倍率，并设置全局倍率值
+		// 单选语义: 激活某倍率时关闭其它倍率（关闭会经 OnDeactivate 还原基数）
 		featureActivators[f] = func(on bool) {
-			if on {
-				for other, act := range featureActivators {
-					if other != f && other.Active() && strings.HasPrefix(other.Name, "经验倍率") {
-						act(false) // 关闭其它倍率（会调用 SetXPBoost(0)）
-						other.SetActive(false)
-					}
-				}
-				SetXPBoost(mult)
-			} else {
-				SetXPBoost(0)
+			if !on {
+				return
 			}
+			for other := range featureActivators {
+				if other != f && other.Active() && strings.HasPrefix(other.Name, "经验倍率") {
+					DeactivateFeature(other, activeRuntime)
+				}
+			}
+			xpBoostBase.Store(0) // 重新捕获基数
+			xpBoostLast.Store(0)
 		}
 		return f
 	}
