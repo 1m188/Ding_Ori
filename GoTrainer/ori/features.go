@@ -118,6 +118,58 @@ func (g *freezeInt) Tick(r *Runtime) {
 	}
 }
 
+// freezeMaxFloat 「无限生命 / 无限能量」语义: 每周期把当前值拉满到上限。
+//
+// 与 freezeFloat（捕获激活瞬间的值并保持）的区别: 即使激活时当前值很低
+// （残血、空能量），也会立即补满并持续保持，符合"无限"的直觉语义。
+//
+//	isInt=true  -> 上限是 int32（SeinHealthController.MaxHealth），写入 float
+//	               （Amount 是 float，需转换）
+//	isInt=false -> 上限是 float32（SeinEnergy.Max），直接写入
+type freezeMaxFloat struct {
+	f      *Feature
+	get    func(r *Runtime) (uint32, bool) // 当前值字段
+	getMax func(r *Runtime) (uint32, bool) // 上限字段
+	isInt  bool
+}
+
+func (g *freezeMaxFloat) Tick(r *Runtime) {
+	if !g.f.Active() {
+		return
+	}
+	addr, ok := g.get(r)
+	if !ok {
+		g.f.setStatus("地址解析失败")
+		return
+	}
+	maxAddr, ok := g.getMax(r)
+	if !ok {
+		g.f.setStatus("地址解析失败")
+		return
+	}
+	var target float32
+	if g.isInt {
+		mv, ok := r.Proc.ReadI32(maxAddr)
+		if !ok || mv <= 0 {
+			g.f.setStatus("读取上限失败")
+			return
+		}
+		target = float32(mv)
+	} else {
+		mv, ok := r.Proc.ReadF32(maxAddr)
+		if !ok || mv < 0 {
+			g.f.setStatus("读取上限失败")
+			return
+		}
+		target = mv
+	}
+	if r.Proc.WriteF32(addr, target) {
+		g.f.setStatus(fmt.Sprintf("已补满 = %.0f", target))
+	} else {
+		g.f.setStatus("写入失败")
+	}
+}
+
 // freezeFloat 冻结浮点（语义同 freezeInt）。
 type freezeFloat struct {
 	f   *Feature
@@ -472,10 +524,14 @@ func (g *xpBoostOption) Tick(r *Runtime) {}
 // tickXPBoost 维持 Experience = 基数 × 倍率。
 func tickXPBoost(r *Runtime) {
 	m, _ := xpBoostMult.Load().(float32)
-	if m <= 0 || r.SeinLevel == 0 {
+	if m <= 0 {
 		return
 	}
-	addr := r.SeinLevel + OffLevelExperience
+	_, level, _, _, _, _ := r.Addrs()
+	if level == 0 {
+		return
+	}
+	addr := level + OffLevelExperience
 	base := xpBoostBase.Load()
 	if base <= 0 {
 		cur, ok := r.Proc.ReadI32(addr)
@@ -513,23 +569,29 @@ func BuildFeatures() []*Feature {
 	xpBoostBase.Store(0)
 
 	// ---- 字段地址闭包 ----
+	// 注意: 所有闭包一律通过 r.Addrs() 取地址（内部加锁）。
+	// 后台 Refresh 会并发改写 Runtime 的地址字段，直接读会构成数据竞争。
 	lvlSP := func(r *Runtime) (uint32, bool) {
-		if r.SeinLevel == 0 {
+		_, level, _, _, _, _ := r.Addrs()
+		if level == 0 {
 			return 0, false
 		}
-		return r.SeinLevel + OffLevelSkillPoints, true
+		return level + OffLevelSkillPoints, true
 	}
 	lvlEXP := func(r *Runtime) (uint32, bool) {
-		if r.SeinLevel == 0 {
+		_, level, _, _, _, _ := r.Addrs()
+		if level == 0 {
 			return 0, false
 		}
-		return r.SeinLevel + OffLevelExperience, true
+		return level + OffLevelExperience, true
 	}
-	hp := func(r *Runtime) (uint32, bool) {
-		if r.SeinCharacter == 0 {
+	// healthObj 解析 SeinCharacter -> Mortality -> HealthController 链。
+	healthObj := func(r *Runtime) (uint32, bool) {
+		sein, _, _, _, _, _ := r.Addrs()
+		if sein == 0 {
 			return 0, false
 		}
-		mor, ok := r.Proc.ReadU32(r.SeinCharacter + OffSeinMortality)
+		mor, ok := r.Proc.ReadU32(sein + OffSeinMortality)
 		if !ok || mor == 0 {
 			return 0, false
 		}
@@ -537,59 +599,95 @@ func BuildFeatures() []*Feature {
 		if !ok2 || h == 0 {
 			return 0, false
 		}
-		return h + OffHealthAmount, true
+		return h, true
 	}
-	en := func(r *Runtime) (uint32, bool) {
-		if r.SeinCharacter == 0 {
+	energyObj := func(r *Runtime) (uint32, bool) {
+		sein, _, _, _, _, _ := r.Addrs()
+		if sein == 0 {
 			return 0, false
 		}
-		e, ok := r.Proc.ReadU32(r.SeinCharacter + OffSeinEnergy)
+		e, ok := r.Proc.ReadU32(sein + OffSeinEnergy)
 		if !ok || e == 0 {
+			return 0, false
+		}
+		return e, true
+	}
+	hp := func(r *Runtime) (uint32, bool) {
+		h, ok := healthObj(r)
+		if !ok {
+			return 0, false
+		}
+		return h + OffHealthAmount, true
+	}
+	hpMax := func(r *Runtime) (uint32, bool) {
+		h, ok := healthObj(r)
+		if !ok {
+			return 0, false
+		}
+		return h + OffHealthMaxHealth, true
+	}
+	en := func(r *Runtime) (uint32, bool) {
+		e, ok := energyObj(r)
+		if !ok {
 			return 0, false
 		}
 		return e + OffEnergyCurrent, true
 	}
-	deaths := func(r *Runtime) (uint32, bool) {
-		if r.DeathCounter == 0 {
+	enMax := func(r *Runtime) (uint32, bool) {
+		e, ok := energyObj(r)
+		if !ok {
 			return 0, false
 		}
-		return r.DeathCounter + OffDeathCounterValue, true
+		return e + OffEnergyMax, true
+	}
+	deaths := func(r *Runtime) (uint32, bool) {
+		_, _, _, _, _, death := r.Addrs()
+		if death == 0 {
+			return 0, false
+		}
+		return death + OffDeathCounterValue, true
 	}
 	soulCd := func(r *Runtime) (uint32, bool) {
-		if r.SoulFlame == 0 {
+		_, _, soul, _, _, _ := r.Addrs()
+		if soul == 0 {
 			return 0, false
 		}
-		return r.SoulFlame + OffSoulFlameCooldownRemaining, true
+		return soul + OffSoulFlameCooldownRemaining, true
 	}
 	jumpH := func(r *Runtime) (uint32, bool) {
-		if r.SeinJump == 0 {
+		_, _, _, jump, _, _ := r.Addrs()
+		if jump == 0 {
 			return 0, false
 		}
-		return r.SeinJump + OffJumpFirstHeight, true
+		return jump + OffJumpFirstHeight, true
 	}
 	jumpImp := func(r *Runtime) (uint32, bool) {
-		if r.SeinJump == 0 {
+		_, _, _, jump, _, _ := r.Addrs()
+		if jump == 0 {
 			return 0, false
 		}
-		return r.SeinJump + OffJumpImpulse, true
+		return jump + OffJumpImpulse, true
 	}
 	dblCount := func(r *Runtime) (uint32, bool) {
-		if r.DoubleJump == 0 {
+		_, _, _, _, dbl, _ := r.Addrs()
+		if dbl == 0 {
 			return 0, false
 		}
-		return r.DoubleJump + OffDoubleJumpCount, true
+		return dbl + OffDoubleJumpCount, true
 	}
 	dblStrength := func(r *Runtime) (uint32, bool) {
-		if r.DoubleJump == 0 {
+		_, _, _, _, dbl, _ := r.Addrs()
+		if dbl == 0 {
 			return 0, false
 		}
-		return r.DoubleJump + OffDoubleJumpStrength, true
+		return dbl + OffDoubleJumpStrength, true
 	}
 
 	// ---- 构造器 ----
-	newFrozenFloat := func(digit int, name string, get func(*Runtime) (uint32, bool)) *Feature {
+	// 无限生命/能量: 持续补满到上限（而非冻结激活瞬间值）
+	newRefill := func(digit int, name string, get, getMax func(*Runtime) (uint32, bool), isInt bool) *Feature {
 		f := NewFeature(digit, name)
-		allTickers = append(allTickers, &freezeFloat{f: f, get: get})
+		allTickers = append(allTickers, &freezeMaxFloat{f: f, get: get, getMax: getMax, isInt: isInt})
 		return f
 	}
 	newZeroFloat := func(digit int, name string, get func(*Runtime) (uint32, bool)) *Feature {
@@ -656,8 +754,8 @@ func BuildFeatures() []*Feature {
 
 	return []*Feature{
 		// ===== 小键盘 1-9/0（前 10 项）=====
-		newFrozenFloat(1, "无限生命", hp),
-		newFrozenFloat(2, "无限能量", en),
+		newRefill(1, "无限生命", hp, hpMax, true),
+		newRefill(2, "无限能量", en, enMax, false),
 		newZeroFloat(3, "灵魂链接无需冷却", soulCd),
 		newSoulFlameAnywhere(), // 小键盘 4
 		newMultiplier(5, "超级跳", jumpH, 2.5),

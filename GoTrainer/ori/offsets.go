@@ -115,6 +115,16 @@ const (
 	OffJumpThirdHeight    = 0x74 // ThirdJumpHeight (float)
 )
 
+// SeinAbilities 字段偏移（技能子对象容器）。
+//
+// 验证: DE v1.0 活体内存实测 —— Abilities 指向的对象中，
+// +0x08 指向 SeinDoubleJump、+0x0C 指向 SeinJump（vtable->klass->name 校验），
+// 与 IL 字段声明顺序一致。
+const (
+	OffAbilitiesDoubleJump = 0x08 // SeinDoubleJump
+	OffAbilitiesJump       = 0x0C // SeinJump
+)
+
 // SeinDoubleJump 字段偏移（多段跳）。
 const (
 	OffDoubleJumpStrength    = 0x38 // JumpStrength (float)

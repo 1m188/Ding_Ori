@@ -87,6 +87,11 @@ func (p *Process) Close() {
 }
 
 // ReadBytes 读取任意字节。
+//
+// 地址采用零扩展（uint32 -> uintptr）。WoW64 目标的地址空间就是宿主
+// 64 位空间的低 4GB，因此 0x8xxxxxxx 对应的宿主地址就是 0x000000008xxxxxxx；
+// 符号扩展反而会指向未映射区域。区域枚举（ReadableRegions）会先把
+// VQEx 返回的 64 位视图掩码到低 32 位，两者保持一致。
 func (p *Process) ReadBytes(addr uint32, buf []byte) bool {
 	if p == nil || p.Handle == 0 || addr == 0 {
 		return false

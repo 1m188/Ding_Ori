@@ -364,13 +364,11 @@ func (a *app) sessionWatch(s *session) {
 			}
 		}
 		if !s.r.HasSein() {
-			a.setMsg("正在全堆扫描定位 Sein 对象（约 15 秒）…")
-			if err := s.r.ScanObjects(); err == nil {
-				a.setMsg("Sein 对象已定位，可以使用功能了。")
-			} else {
-				a.setMsg("扫描未命中（需进入存档）—— 15 秒后自动重试")
-				time.Sleep(15 * time.Second)
+			if s.r.Refresh() {
+				a.setMsg("已定位游戏对象，可以使用功能了。")
 			}
+		} else {
+			s.r.Refresh()
 		}
 		time.Sleep(2 * time.Second)
 	}
