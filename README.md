@@ -42,7 +42,8 @@
 | 小键盘 4 | 可在不安全区域建立灵魂链接 | ✓ 实测 |
 | 小键盘 5 | 超级跳 | ✓ 实测（同时放大 6 个跳跃高度字段） |
 | 小键盘 6 | 无限二段跳 | ✓ 实测（同时开启二段跳能力） |
-| 小键盘 7 | 无限能力点数 | ✓ 实测（不足才补满，目标 99） |
+| 小键盘 7 | 无限冲刺 | ✓ 只授予基础冲刺能力 + 解除冲刺次数限制（**不碰技能树/AirDash**）；自购空中冲刺后空中同样无限 |
+| 小键盘 8 | 无限能力点数 | ✓ 实测（不足才补满，目标 99） |
 
 **特殊功能 —— Ctrl+小键盘 1..6**
 
@@ -82,6 +83,10 @@
 - **无限生命 / 无限能量 = 持续补满到上限**：每周期读上限并写满当前值。
   残血/空能量时激活也会立即补满。
 - **超级跳 / 无限二段跳 = 捕获原值后放大 / 维持，关闭时还原**。
+- **无限冲刺 = 只解锁基础冲刺 + 解除冲刺次数限制**：授予 `PlayerAbilities.Dash`
+  （基础能力，关闭不还原，§8-15），再持续清 `m_hasDashed` 使冲刺不再"空中限一次"
+  ——**只要游戏允许在此处冲刺就无限**（地面任何时候；空中需**自己在技能树购买**
+  AirDash，本功能绝不代授/代买，只读它做状态提示）。详见 §7-15。
 - **无限能力点数 = 不足才补满**：低于 99 才写，达到或超过不动（原因见 §8-13）。
 - **100% 探索 / 解锁全部基础技能 = 一次性动作型**：开启期间维持，关闭不做任何事，
   再次开启仍会把缺的补上。
@@ -367,6 +372,19 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 | m_numberOfJumpsAvailable | 0x40 | 剩余跳跃次数（int） |
 | m_remainingLockTime | 0x44 | |
 
+### SeinDashAttack（冲刺，`SeinAbilities+0x80`）
+
+组件只有**获得冲刺能力后**才实例化（未解锁时 `Abilities+0x80 == 0`）。
+
+| 字段 | 偏移 | 说明 |
+|---|---|---|
+| m_lastDashTime | 0xAC | float；`DashHasCooledDown = Time.time - 此值 > 0.4`（冲刺间隔） |
+| m_hasDashed | 0xB1 | bool；**本次未落地前是否已冲刺**（只在 `IsOnGround` 时清零） |
+
+> `SeinAbilities` 里还有 `Dash` 之外的一批组件（`+0x08` SeinDoubleJump、`+0x0C` SeinJump …）。
+> 空中冲刺的许可还额外要求 `PlayerAbilities.AirDash`（`playerab+0xB8`，CharacterAbility，
+> `HasAbility` 在 +0x08）。
+
 ### PlayerAbilities
 
 - 能力字段全部是 `CharacterAbility` 引用（连续 `0x14`..`0xB0`，共 40 项）；
@@ -405,10 +423,11 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 | 不安全区域建链接 | 按住期间 `soulflame+98（HoldDownDuration）= +Inf`，再 `soulflame+94 = 1.0`、`+C0 = 0` | 必须先检查 `m_tapRemainingTime(+B8) <= 0`，否则轻点开技能树失效（§8-16）；只写 1.0 会被同帧蓄力回退扣掉，故用 +Inf 抑制回退（§8-25）；**每次按键只施放一次**（施放判定不含冷却，连写会刷存档） |
 | 超级跳 | 同时放大 6 个高度字段（0x54/0x58/0x60/0x64/0x70/0x74），关闭还原 | 只放大一个会出现"有的跳得高有的照旧"（§8-17） |
 | 无限二段跳 | `playerab+24 → +8 = 1`（能力开关）+ `doublejump+40 = 999` | 只写次数不够（§8-14）；**关闭时不还原能力开关**（§8-15） |
+| 无限冲刺 | `[playerab+AC]+8 = 1`（只授基础 Dash）+ `dash+0xB1 = 0` | **不碰技能树**（AirDash 只读作提示）；自购 AirDash 后空中同样无限（§7-15）；组件未实例化时需触发一次（读档/买技能） |
 | 无限能力点数 | `level+24`，`< 99` 才写；并把 `level+28`（等级）从 0 修正为 1 | 持续写会与升级结算打架（§8-13）；等级为 0 时技能树打不开（§8-21） |
 | 死亡数归零 | `death+14 = 0` | |
 | 100% 探索 | 遍历 `gw+18` 列表，元素从 `[_items]+0x10` 起，每个区域 `+14 = 1.0`、`+18 = 0` | 元素基址易错（§8-20）；只能解锁"完成地图"成就，不是"找齐秘密"（§7-6） |
-| 解锁全部基础技能 | 上表 11 个 `[playerab+偏移]+8 = 1` | 只写 1 字节；组件实例化见 §7-4 |
+| 解锁全部基础技能 | 上表 11 个 `[playerab+偏移]+8 = 1` | 只写 1 字节；**部分能力需读档或进技能树买一个技能后才生效**（状态栏已提示） |
 | 重置时间 | `timer+1C = 0.0` | 每周期写 = 冻结在 0；对象每周期从静态槽重读（`TimerAddr()`，换场景会重建） |
 | 获得三把钥匙 | `Keys` 静态块 `+0/+1/+2 = 1` | 纯静态类字段（非对象链），由 `KeysAddr()` 定位并缓存；三个元素标记刻意不做（§7-14） |
 | 一命保护 | `diffc+18 = 0`（Easy），仅当 `diffc+1C（LowestDifficulty）== OneLife` 时 | 死亡判定读 `Difficulty`，改它即可断掉清档链；**永不写 `+0x1C`**（成就判定字段）。见 §7-7 |
@@ -524,6 +543,34 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
       三个元素标记**故意不做**：它们驱动 `WorldProgression`（由这些标记反推），
       会连带影响场景触发/过场/传送；强行置位却不做副本，**内容与能力不会获得、
       世界状态自相矛盾，容易卡关**（详见 §8-24 的风险记录）。
+
+15. **冲刺为什么只能在空中冲一次（"无限冲刺"依据）**
+    `SeinDashAttack.CanPerformNormalDash()`：
+
+    ```
+    if (!HasAirDashSkill() && !IsOnGround) return false;   // HasAirDashSkill = PlayerAbilities.AirDash.HasAbility
+    return !AgainstWall() && DashHasCooledDown && !m_hasDashed;
+    ```
+
+    而 `UpdateNormal()` 里**只有** `if (m_sein.IsOnGround) m_hasDashed = false;`，
+    即 `m_hasDashed` 只在落地时清零——这就是"空中一次、落地刷新"的来源。
+    持续把 `m_hasDashed(SeinAbilities.Dash +0xB1)` 写 0 即可无限空中冲刺：
+    - 触发仍需玩家按键（`Core.Input.RightShoulder.Pressed` + 0.15s 内），不会自己连发；
+    - `DashTime(0.5s) > DashHasCooledDown(0.4s)`，冲刺结束冷却已过，不卡帧；
+    - `AgainstWall()` / 能量消耗等其它条件照旧（贴墙走墙冲，冲刺仍耗能量）。
+
+    **能力授予只做最小化**：只把 `PlayerAbilities.Dash(playerab+0xAC)` 的
+    `HasAbility` 置 1（基础能力，关闭不还原，§8-15）；**`AirDash(playerab+0xB8)`
+    只读、绝不写**——"空中冲刺"是技能树内容，由玩家自己购买。玩家买下 AirDash 后，
+    本功能的无限次冲刺在空中同样生效（`CanPerformNormalDash` 的空中分支即通过）。
+    组件 `SeinAbilities+0x80 → SeinDashAttack` 由 `HasAbility` 经
+    `EnsureRightPrefabsAreThereForAbilities()` 实例化；该方法只在**读档
+    （Serialize 读）/ SetAbility（技能树购买、捡能力道具）/ 角色跨场景生成**
+    时调用，**不是每帧**。所以只写标志位不会立刻建组件——实测某存档
+    `Dash.HasAbility=1` 而组件为 0，游戏照样正常跑（`SetStateActive` 是带判空的
+    静态扩展 `if (state != null)`，其余读组件处也多有判空）。
+    结论：**授予后要触发一次才会实体化**——最方便的是进技能树买任意一个技能
+    （SetAbility 结尾无条件调 EnsureRightPrefabs），其次读档/跨场景生成。
 
 ## §8 踩坑清单（现象 → 根因 → 修法）
 

@@ -2345,7 +2345,7 @@ func cmdBases(p *core.Process) {
 	mor := rd(sein + ori.OffSeinMortality)
 	names := []string{
 		"sein", "abilities", "level", "energy", "mortality", "health",
-		"soulflame", "jump", "doublejump", "playerab", "death", "gw", "diffc", "timer", "keys",
+		"soulflame", "jump", "doublejump", "dash", "playerab", "death", "gw", "diffc", "timer", "keys",
 	}
 	vals := []uint32{
 		sein,
@@ -2357,6 +2357,7 @@ func cmdBases(p *core.Process) {
 		rt.SubAddr("soulflame"),
 		rt.SubAddr("jump"),
 		rt.SubAddr("doublejump"),
+		rt.SubAddr("dash"),
 		rd(sein + ori.OffSeinPlayerAbil),
 		rt.DeathCounterAddr(),
 		rt.GameWorldAddr(),

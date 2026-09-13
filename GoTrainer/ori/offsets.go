@@ -239,6 +239,39 @@ const (
 const (
 	OffAbilitiesDoubleJump = 0x08 // SeinDoubleJump
 	OffAbilitiesJump       = 0x0C // SeinJump
+	OffAbilitiesDash       = 0x80 // SeinDashAttack（"无限冲刺"用；字段声明在 IceSpiritFlame 之后）
+)
+
+// SeinDashAttack 字段偏移（"无限冲刺"）。
+//
+// 机制（源码 SeinDashAttack.CanPerformNormalDash / UpdateNormal）:
+//
+//	if (!HasAirDashSkill() && !IsOnGround) return false;   // HasAirDashSkill = PlayerAbilities.AirDash.HasAbility
+//	return !AgainstWall() && DashHasCooledDown && !m_hasDashed;
+//
+// m_hasDashed 在冲刺时置 true，**只在落地（IsOnGround）时清 false** ——
+// 这就是"空中只能冲一次"。持续写 0 即可解除该限制（DashTime 0.5s > 0.4s
+// 冷却，所以不会卡帧）。
+//
+// ⚠ 该组件只有**获得冲刺能力后**才实例化（Prefabs.EnsureRightPrefabsAreThereForAbilities），
+// 未解锁时 Abilities+0x80 为 0。
+const (
+	OffDashHasDashed    = 0xB1 // m_hasDashed (bool, 1 字节) —— 本段空中是否已冲刺
+	OffDashLastDashTime = 0xAC // m_lastDashTime (float) —— DashHasCooledDown = Time.time-此值 > 0.4
+)
+
+// PlayerAbilities 里的冲刺相关开关（CharacterAbility；HasAbility 在 +0x08）。
+//
+// "无限冲刺"只授予**基础冲刺能力** Dash（与无限二段跳同款），并解除冲刺次数限制。
+// **不写 AirDash**——"空中冲刺"是技能树里玩家自己买的；本功能只读取它用于状态提示，
+// 玩家买了之后，无限次冲刺在空中同样生效。
+// 不主动还原 Dash（与二段跳一致）: SeinNestedPrefab.IsInstantiated 由 HasAbility
+// 驱动，还原会让组件被 Destroy（见 §8-15）。
+// 组件实例化时机见 §7-4: 非默认实例化的能力要等 EnsureRightPrefabs 跑过
+// （读档 / 技能树购买 / 捡能力道具）才会实体化。
+const (
+	OffPlayerAbilitiesDash    = 0xAC // PlayerAbilities.Dash（CharacterAbility）——本功能写入
+	OffPlayerAbilitiesAirDash = 0xB8 // PlayerAbilities.AirDash（CharacterAbility）——只读，技能树内容
 )
 
 // SeinDoubleJump 字段偏移（多段跳）。

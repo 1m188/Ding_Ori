@@ -41,7 +41,7 @@
         </CheatEntry>
         <CheatEntry>
           <ID>2002</ID>
-          <Description>"符号: sein=SeinCharacter  abilities=SeinAbilities  level=SeinLevel  energy=SeinEnergy  mortality=SeinMortality  health=SeinHealthController  soulflame=SeinSoulFlame  jump=SeinJump  doublejump=SeinDoubleJump  playerab=PlayerAbilities  death=SeinDeathCounter  gw=GameWorld  diffc=DifficultyController  timer=GameTimer  keys=Keys 静态数据块（用 probe bases -xml -vanilla 生成）"</Description>
+          <Description>"符号: sein=SeinCharacter  abilities=SeinAbilities  level=SeinLevel  energy=SeinEnergy  mortality=SeinMortality  health=SeinHealthController  soulflame=SeinSoulFlame  jump=SeinJump  doublejump=SeinDoubleJump  playerab=PlayerAbilities  death=SeinDeathCounter  gw=GameWorld  diffc=DifficultyController  timer=GameTimer  keys=Keys 静态数据块  dash=SeinDashAttack（用 probe bases -xml -vanilla 生成）"</Description>
           <LastState/>
           <Color>808080</Color>
           <GroupHeader>1</GroupHeader>
@@ -158,8 +158,15 @@
           <Address>doublejump+40</Address>
         </CheatEntry>
         <CheatEntry>
+          <ID>2208</ID>
+          <Description>"7 无限冲刺 — 只授基础冲刺 [playerab+AC]+8=1，并把 SeinDashAttack.m_hasDashed(dash+B1)=0（不碰技能树/AirDash）；⚠ 偏移抄自终极版，原版未核验"</Description>
+          <LastState/>
+          <VariableType>Byte</VariableType>
+          <Address>dash+B1</Address>
+        </CheatEntry>
+        <CheatEntry>
           <ID>2207</ID>
-          <Description>"7 无限能力点数 — SkillPoints(level+24, 目标 99) / Experience(level+2C)"</Description>
+          <Description>"8 无限能力点数 — SkillPoints(level+24, 目标 99) / Experience(level+2C)"</Description>
           <LastState/>
           <VariableType>4 Bytes</VariableType>
           <Address>level+24</Address>

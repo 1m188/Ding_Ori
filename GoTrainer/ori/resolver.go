@@ -52,6 +52,7 @@ type Runtime struct {
 	SoulFlame     uint32 // +0x28
 	SeinJump      uint32 // Abilities(+0x10) +0x0C
 	DoubleJump    uint32 // Abilities(+0x10) +0x08
+	SeinDash      uint32 // Abilities(+0x10) +0x80（SeinDashAttack，未解锁冲刺时为 0）
 
 	// --- 独立单例（后台异步定位，可重试）---
 	DeathCounter   uint32 // SeinDeathCounter.Instance
@@ -93,6 +94,7 @@ func (r *Runtime) SetProcess(p *core.Process) {
 	r.SoulFlame = 0
 	r.SeinJump = 0
 	r.DoubleJump = 0
+	r.SeinDash = 0
 	r.DeathCounter = 0
 	r.DiffController = 0
 	r.GameWorld = 0
@@ -171,6 +173,8 @@ func (r *Runtime) SubAddr(which string) uint32 {
 		return r.SeinJump
 	case "doublejump":
 		return r.DoubleJump
+	case "dash":
+		return r.SeinDash
 	case "death":
 		return r.DeathCounter
 	case "diff":
@@ -493,18 +497,25 @@ func (r *Runtime) refreshChain(p *core.Process, sein uint32) {
 	soul, _ := p.ReadU32(sein + OffSeinSoulFlame)
 	ab, _ := p.ReadU32(sein + OffSeinAbilities)
 
-	var jump, dbl uint32
-	if isHeapPtr(ab) {
+	var jump, dbl, dash uint32
+	if isObjPtrLow(ab) {
 		jump, _ = p.ReadU32(ab + OffAbilitiesJump)
 		dbl, _ = p.ReadU32(ab + OffAbilitiesDoubleJump)
-		if !isHeapPtr(jump) {
+		dash, _ = p.ReadU32(ab + OffAbilitiesDash)
+		// 用 isObjPtrLow 而非 isHeapPtr：能力组件可能分配在 0x30xxxxxx 这类
+		// 低于 0x40000000 的带里（实测 SeinDashAttack 在 0x304103C0），
+		// 用 isHeapPtr 会把它当成无效指针而清 0，导致功能"看不到组件"。
+		if !isObjPtrLow(jump) {
 			jump = 0
 		}
-		if !isHeapPtr(dbl) {
+		if !isObjPtrLow(dbl) {
 			dbl = 0
 		}
+		if !isObjPtrLow(dash) {
+			dash = 0 // 未解锁冲刺时组件未实例化
+		}
 	}
-	if !isHeapPtr(soul) {
+	if !isObjPtrLow(soul) {
 		soul = 0
 	}
 
@@ -513,6 +524,7 @@ func (r *Runtime) refreshChain(p *core.Process, sein uint32) {
 	r.SoulFlame = soul
 	r.SeinJump = jump
 	r.DoubleJump = dbl
+	r.SeinDash = dash
 	r.mu.Unlock()
 }
 
@@ -542,6 +554,7 @@ func (r *Runtime) Refresh() bool {
 		r.SoulFlame = 0
 		r.SeinJump = 0
 		r.DoubleJump = 0
+		r.SeinDash = 0
 		r.LastScanError = "未找到活体玩家对象（请进入存档后按 F12 重试）"
 		r.mu.Unlock()
 		return false

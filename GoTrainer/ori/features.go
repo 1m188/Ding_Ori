@@ -1054,16 +1054,20 @@ func (g *grantAllAbilities) Tick(r *Runtime) {
 			granted++
 		}
 	}
+	// 提示语：基础能力只是标志位；部分能力的组件要等游戏触发一次
+	// EnsureRightPrefabs 才会创建（读档 / 技能树买一个技能）。这里给通用说法，
+	// 不列具体能力名——名单会随版本/解锁情况变化，写死既不准也难维护。
+	const needTrigger = "；部分能力需读档或进技能树买一个技能后才生效"
 	switch {
 	case total == 0:
 		g.f.setStatus("地址解析失败")
 	case granted > 0:
 		g.sawWrite = true
-		g.f.setStatus(fmt.Sprintf("已补授 %d 项基础能力（共 %d 项）", granted, total))
+		g.f.setStatus(fmt.Sprintf("已补授 %d/%d 项基础能力%s", granted, total, needTrigger))
 	case g.sawWrite:
-		g.f.setStatus(fmt.Sprintf("本轮已补授完毕（共 %d 项基础能力）", total))
+		g.f.setStatus(fmt.Sprintf("本轮已补授完毕（共 %d 项）%s", total, needTrigger))
 	default:
-		g.f.setStatus(fmt.Sprintf("全部 %d 项基础能力均已拥有", total))
+		g.f.setStatus(fmt.Sprintf("全部 %d 项基础能力均已拥有%s", total, needTrigger))
 	}
 }
 
@@ -1138,6 +1142,84 @@ func (g *infiniteDoubleJump) OnDeactivate(r *Runtime) {
 	// 因此首次开启后能力保持授予（副作用: 关闭功能后仍保留普通二段跳，
 	// 即一次空中跳）。关闭功能只是停止维持无限次数。
 	g.have, g.abilit = false, 0
+}
+
+// ---------- 无限冲刺 ----------
+
+// infiniteDash 无限冲刺（只做最小化：解锁基础冲刺能力 + 解除冲刺次数限制）。
+//
+// **只碰基础能力，不碰任何技能树内容**：
+//
+//  1. 授予基础冲刺能力 PlayerAbilities.Dash 的 HasAbility（与无限二段跳同款）。
+//     关闭时不还原——Dash 的 SeinNestedPrefab.IsInstantiated 由 HasAbility 驱动，
+//     还原会让组件被 Destroy（§8-15）。
+//     ⚠ **不授予 AirDash**（"空中冲刺"是技能树里玩家自己买的）：
+//     没有它时只能在地面冲刺，这是预期行为。
+//
+//  2. 解除冲刺次数限制: 源码 SeinDashAttack
+//
+//     CanPerformNormalDash():
+//     if (!HasAirDashSkill() && !IsOnGround) return false;   // HasAirDashSkill = PlayerAbilities.AirDash.HasAbility
+//     return !AgainstWall() && DashHasCooledDown && !m_hasDashed;
+//     UpdateNormal(): if (m_sein.IsOnGround) m_hasDashed = false; // 只有落地才清零
+//
+//     持续把 m_hasDashed(+0xB1) 写 0 即可无限次冲刺——**只要游戏允许在此处冲刺**
+//     （地面任何时候都行；空中则需玩家已自行购买 AirDash）。
+//     AirDash 只被读取用于状态提示，从不写入；一旦玩家买了它，空中同样无限次。
+//     不卡帧: DashTime(0.5s) > DashHasCooledDown 的 0.4s；且仍需玩家按键。
+type infiniteDash struct {
+	f *Feature
+}
+
+func (g *infiniteDash) Tick(r *Runtime) {
+	if !g.f.Active() {
+		return
+	}
+	sein, _, _, _, _, _ := r.Addrs()
+	if sein == 0 {
+		g.f.setStatus("地址解析失败")
+		return
+	}
+
+	// ① 只授予基础冲刺能力（技能树内容一律不碰）
+	granted := false
+	airOwned := false
+	if pa, ok := r.Proc.ReadU32(sein + OffSeinPlayerAbil); ok && isHeapPtr(pa) {
+		if obj, ok2 := r.Proc.ReadU32(pa + OffPlayerAbilitiesDash); ok2 && isHeapPtr(obj) {
+			granted = r.Proc.WriteU8(obj+OffAbilityHasAbility, 1)
+		}
+		// AirDash 只读，用于状态提示——绝不写入（那是技能树里自己买的）
+		if obj, ok2 := r.Proc.ReadU32(pa + OffPlayerAbilitiesAirDash); ok2 && isHeapPtr(obj) {
+			if v, ok3 := r.Proc.ReadU8(obj + OffAbilityHasAbility); ok3 && v != 0 {
+				airOwned = true
+			}
+		}
+	}
+
+	// ② 解除冲刺次数限制（组件存在时；由基础冲刺能力经 EnsureRightPrefabs 实例化）
+	dash := r.SubAddr("dash")
+	if dash == 0 {
+		g.f.setStatus("已授予基础冲刺能力（组件待读档或买技能后实例化）")
+		return
+	}
+	// 类名校验: 组件可能落在 0x30xxxxxx（低于 minObjAddr），故用 classOfMin；
+	// 放宽下界后必须校验，避免把 m_hasDashed 写进无关内存。
+	if nm, _, ok := r.classOfMin(r.Proc, dash, minObjLowAddr); !ok || nm != "SeinDashAttack" {
+		g.f.setStatus("冲刺组件校验失败")
+		return
+	}
+	if !r.Proc.WriteU8(dash+OffDashHasDashed, 0) {
+		g.f.setStatus("已授予能力（次数写入失败）")
+		return
+	}
+	switch {
+	case airOwned:
+		g.f.setStatus("无限冲刺已启用 ✓ 可无限空中冲刺")
+	case granted:
+		g.f.setStatus("已授予基础冲刺 ✓ 可无限地面冲刺（空中需自行购买）")
+	default:
+		g.f.setStatus("无限冲刺已启用 ✓（未购空中冲刺：仅地面）")
+	}
 }
 
 // ---------- 功能表 ----------
@@ -1267,6 +1349,12 @@ func BuildFeatures() []*Feature {
 		allTickers = append(allTickers, &infiniteDoubleJump{f: f})
 		return f
 	}
+	// 无限冲刺: 持续把 m_hasDashed 写 0（见 infiniteDash 说明）
+	newInfiniteDash := func(digit int) *Feature {
+		f := NewFeature(digit, "无限冲刺")
+		allTickers = append(allTickers, &infiniteDash{f: f})
+		return f
+	}
 	// 能力点数: 不足才补满（见 setIntMin 说明）。
 	// 无限能力点数（含"等级 0 → 1"修正，见 skillPointsRefill 说明）
 	newSkillPoints := func(digit int, target int32) *Feature {
@@ -1318,7 +1406,8 @@ func BuildFeatures() []*Feature {
 		newSoulFlameAnywhere(4),
 		newSuperJump(5, 2.5),
 		newInfiniteDoubleJump(6),
-		newSkillPoints(7, 99),
+		newInfiniteDash(7),
+		newSkillPoints(8, 99),
 		// ===== 特殊功能: Ctrl+小键盘（顺序接续）=====
 		newCtrlCounterLock(1, "死亡数归零", deaths, 0),
 		newExplore100(2),
