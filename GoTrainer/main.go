@@ -28,17 +28,16 @@ import (
 // ---------- console ----------
 
 var (
-	k32       = syscall.NewLazyDLL("kernel32.dll")
-	pStdout   = k32.NewProc("GetStdHandle")
-	pWriteW   = k32.NewProc("WriteConsoleW")
-	pGetMode  = k32.NewProc("GetConsoleMode")
-	pSetMode  = k32.NewProc("SetConsoleMode")
-	pSetCur   = k32.NewProc("SetConsoleCursorPosition")
-	pSetTitle = k32.NewProc("SetConsoleTitleW")
-	pReadCI   = k32.NewProc("ReadConsoleInputW")
-	pCreateW  = k32.NewProc("CreateFileW")
-	pNumCI    = k32.NewProc("GetNumberOfConsoleInputEvents")
-	pGetInfo  = k32.NewProc("GetConsoleScreenBufferInfo")
+	k32      = syscall.NewLazyDLL("kernel32.dll")
+	pStdout  = k32.NewProc("GetStdHandle")
+	pWriteW  = k32.NewProc("WriteConsoleW")
+	pGetMode = k32.NewProc("GetConsoleMode")
+	pSetMode = k32.NewProc("SetConsoleMode")
+	pSetCur  = k32.NewProc("SetConsoleCursorPosition")
+	pReadCI  = k32.NewProc("ReadConsoleInputW")
+	pCreateW = k32.NewProc("CreateFileW")
+	pNumCI   = k32.NewProc("GetNumberOfConsoleInputEvents")
+	pGetInfo = k32.NewProc("GetConsoleScreenBufferInfo")
 )
 
 const stdOutputHandle = ^uintptr(10) // STD_OUTPUT_HANDLE = (DWORD)-11
@@ -51,10 +50,7 @@ func init() {
 	var mode uint32
 	pGetMode.Call(stdoutHandle, uintptr(unsafe.Pointer(&mode)))
 	pSetMode.Call(stdoutHandle, uintptr(mode|0x0004))
-	// 启动即设置标题，便于在任务栏/终端标签里识别。
-	if t, err := syscall.UTF16PtrFromString("OriTrainer — 版本选择"); err == nil {
-		pSetTitle.Call(uintptr(unsafe.Pointer(t)))
-	}
+	// 不动窗口标题，保持宿主/默认标题。
 	// 进入备用屏幕缓冲区并隐藏光标:
 	// 备用缓冲区没有回滚历史，界面在原地刷新，不会不断向下追加内容
 	// （旧实现每次 ESC[2J + 从头写，在窗口比内容矮时会持续滚屏、滚动条
@@ -449,9 +445,6 @@ func (a *app) choose(prof ori.Profile) {
 	} else {
 		a.msg.Store(fmt.Sprintf("游戏 %s 未运行——启动游戏后自动附加。", prof.ProcessName))
 	}
-	if t, err := syscall.UTF16PtrFromString("OriTrainer — " + prof.DisplayName); err == nil {
-		pSetTitle.Call(uintptr(unsafe.Pointer(t)))
-	}
 	// 启动会话协程: 附加看护/堆扫描 + 功能引擎
 	go a.sessionWatch(s)
 	go a.engineLoop(s)
@@ -488,7 +481,7 @@ func renderSelector(a *app) {
 func renderTrainer(a *app, s *session) {
 	var b strings.Builder
 
-	b.WriteString(cTitle + "  OriTrainer v2.0 — " + s.prof.DisplayName + " 修改器" + cReset +
+	b.WriteString(cTitle + "  奥日与黑暗森林 — " + s.prof.DisplayName + " 修改器" + cReset +
 		cDim + "    [ESC] 返回版本选择" + cReset + "\n")
 	b.WriteString(cBox + "  ────────────────────────────────────────────────────────\n" + cReset)
 
@@ -541,7 +534,6 @@ func renderTrainer(a *app, s *session) {
 	b.WriteString("  " + cDim + "本窗口: ↑↓ 选择 · 回车/空格 开关   |   " + cReset +
 		cWhite + "HOME" + cReset + " 全关   " + cWhite + "F12" + cReset + " 重扫   " +
 		cWhite + "F1" + cReset + " 帮助   " + cWhite + "ESC" + cReset + " 返回\n")
-	b.WriteString("  " + cDim + a.getMsg() + cReset + "\n")
 
 	render(b.String())
 }
