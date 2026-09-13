@@ -261,6 +261,7 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 |---|---|---|---|---|
 | SeinLevel | m_sein | 0x20 | ptr | 回指本体（校验用） |
 | SeinLevel | SkillPoints | 0x24 | int | 可用能力点 |
+| SeinLevel | Current | 0x28 | int | **等级；技能树开启要求 > 0**（新存档为 0） |
 | SeinLevel | Experience | 0x2C | int | 经验 |
 | SeinEnergy | MinVisual | 0x18 | float | |
 | SeinEnergy | MaxVisual | 0x1C | float | |
@@ -278,8 +279,13 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 | GameWorld | RuntimeAreas | 0x18 | ptr | → List\<RuntimeGameWorldArea\> |
 | RuntimeGameWorldArea | m_completionAmount | 0x14 | float | 区域完成度 0..1 |
 | RuntimeGameWorldArea | m_dirtyCompletionAmount | 0x18 | bool | 置 0 防重算 |
-| List\<T\> | _items | 0x08 | ptr | 元素数组 |
+| List\<T\> | _items | 0x08 | ptr | **指向数组对象**（不是元素首地址！） |
 | List\<T\> | _size | 0x0C | int | 元素个数 |
+
+> ⚠ **数组元素从 `_items + 0x10` 开始**：数组对象头部是
+> `vtable(0) / monitor(4) / bounds(8) / max_length(0xC)`，元素区在 `+0x10`。
+> 把 `_items` 当元素首地址（`+i*4`）会让所有元素**错位 4 个**——既漏写后半段、
+> 又会把值写进数组类的元数据区（见 §8-20，实际踩过）。
 
 ### SeinSoulFlame
 
@@ -353,9 +359,9 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 | 不安全区域建链接 | 长按确认后 `soulflame+94 = 1.0` | **必须先检查 `m_tapRemainingTime(+B8) <= 0`**，否则轻点开技能树失效（§8-16） |
 | 超级跳 | 同时放大 6 个高度字段（0x54/0x58/0x60/0x64/0x70/0x74），关闭还原 | 只放大一个会出现"有的跳得高有的照旧"（§8-17） |
 | 无限二段跳 | `playerab+24 → +8 = 1`（能力开关）+ `doublejump+40 = 999` | 只写次数不够（§8-14）；**关闭时不还原能力开关**（§8-15） |
-| 无限能力点数 | `level+24`，`< 99` 才写 | 持续写会与升级结算打架（§8-13） |
+| 无限能力点数 | `level+24`，`< 99` 才写；并把 `level+28`（等级）从 0 修正为 1 | 持续写会与升级结算打架（§8-13）；等级为 0 时技能树打不开（§8-21） |
 | 死亡数归零 | `death+14 = 0` | |
-| 100% 探索 | 遍历 `gw+18` 列表，每个区域 `+14 = 1.0`、`+18 = 0` | 只能解锁"完成地图"成就，不是"找齐秘密"（§7-6） |
+| 100% 探索 | 遍历 `gw+18` 列表，元素从 `[_items]+0x10` 起，每个区域 `+14 = 1.0`、`+18 = 0` | 元素基址易错（§8-20）；只能解锁"完成地图"成就，不是"找齐秘密"（§7-6） |
 | 解锁全部基础技能 | 上表 11 个 `[playerab+偏移]+8 = 1` | 只写 1 字节；组件实例化见 §7-4 |
 | 一命保护 | `diffc+18 = 1` | ⚠ 目标对象定位不到，未生效（§11） |
 
@@ -409,6 +415,13 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
     + 已发现图标"（`UpdateCompletionAmount`：`(visitedFaces + found) /
     (faceCount + total)`）。直接写 `m_completionAmount` 是改派生值，
     所以要清 `m_dirtyCompletionAmount` 并持续维持。
+    注意 `GameWorld.CompletionPercentage` 的实现：**只有 `CompletionAmount ≈ 1`
+    才返回 100，否则钳到 [0,99]** —— 所以少写一个区域，界面就永远到不了 100。
+12. **技能树的开启门槛**：`SeinSoulFlame.AllowedToAccessSkillTree =>
+    m_sein.Level.Current > 0 && IsSafeToCastSoulFlame == Safe`。
+    而 `SeinLevel.Current`（等级）只在 `LevelUp()` 里 `++`，**全新存档从未升级时
+    它就是 0** → 技能树一直打不开、能力点花不出去。所以在存档点"轻点"想开技能树
+    却没反应时，先查 `level+0x28` 是不是 0。
 
 ## §8 踩坑清单（现象 → 根因 → 修法）
 
@@ -506,6 +519,22 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
     错判"锚点失效"。实际锚点一直有效，只是高地址值被 §8-2 的上限过滤掉了。
     → 教训：**看到"可疑数据"先按 dword 解读，别按文本解读**；并把范围/对齐假设
     当作首要怀疑对象。
+
+20. **"100% 探索"只写到 64%，且把值写进了元数据区**
+    → 把 `List._items` 当成元素首地址用（`items+i*4`）。实际 `_items` 指向**数组
+    对象**，元素从 **`+0x10`** 开始 → 元素整体错位 4 个：①漏写后半段区域
+    （7/11 = 64%，界面永远到不了 100）；②前 4 次循环把 `1.0` 写进了数组类
+    vtable 区（`+0x14`）。
+    → 修：元素基址用 `_items + 0x10`；并**加类名校验**（只写
+    `RuntimeGameWorldArea`），这样即使基址再算错也只会跳过、不会写坏东西。
+    → 注：被误写的是运行期元数据（mono vtable），**重启游戏即重建**，无持久影响。
+
+21. **技能树打不开、能力点花不出去**
+    → `AllowedToAccessSkillTree => Level.Current > 0 && IsSafeToCastSoulFlame == Safe`；
+    新存档 `Current`（等级）为 0（只在 `LevelUp()` 里自增）→ 门槛不成立。
+    → 修："无限能力点数"功能顺带把 `level+0x28` 从 0 修正为 1（只在它是 0 时动），
+    并在状态里提示"等级 0→1（技能树需等级>0）"。
+    → 另注：技能树只在**存档点范围内轻点**（0.3 秒内松开）才开；长按是建立链接。
 
 ## §9 诊断工具 `probe`（等价 CE 的核心能力）
 

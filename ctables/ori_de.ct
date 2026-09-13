@@ -262,7 +262,7 @@
 
         <CheatEntry>
           <ID>1161</ID>
-          <Description>"7 无限能力点数 — 「不足才补满」：低于 99 才写，达到/超过则不动（避免与升级结算互相覆盖、动画刷屏）"</Description>
+          <Description>"7 无限能力点数 — 「不足才补满」（低于 99 才写）；另外会把等级(Current)从 0 修正为 1：技能树开启条件是 Current 大于 0，新存档等级为 0 时技能树打不开、点数花不出去"</Description>
           <LastState/>
           <Color>0080FF</Color>
           <GroupHeader>1</GroupHeader>
@@ -283,6 +283,13 @@
             </CheatEntry>
             <CheatEntry>
               <ID>1164</ID>
+              <Description>"SeinLevel.Current（等级, int, **技能树开启要求 > 0**；新存档为 0）"</Description>
+              <LastState/>
+              <VariableType>4 Bytes</VariableType>
+              <Address>level+28</Address>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>1165</ID>
               <Description>"SeinLevel.m_sein（回指 SeinCharacter, 定位校验用, 只读）"</Description>
               <LastState/>
               <VariableType>4 Bytes</VariableType>
@@ -335,24 +342,24 @@
             </CheatEntry>
             <CheatEntry>
               <ID>1213</ID>
-              <Description>"List._items（元素数组首地址）+ List._size（元素个数）"</Description>
+              <Description>"List._items 指向的是**数组对象**（不是元素数组首地址！）+0x08 才是元素区）"</Description>
               <LastState/>
               <VariableType>4 Bytes</VariableType>
               <Address>[[gw+18]+8]</Address>
             </CheatEntry>
             <CheatEntry>
               <ID>1214</ID>
-              <Description>"区域[0].m_completionAmount（完成度 0..1, float）——后续区域指针在 _items 数组里 +4 步进"</Description>
+              <Description>"区域[0].m_completionAmount（完成度 0..1, float）。⚠ 元素从数组对象 +0x10 起（前 4 个 dword 是 vtable/monitor/bounds/max_length）；后续区域在元素区 +4 步进"</Description>
               <LastState/>
               <VariableType>Float</VariableType>
-              <Address>[[[gw+18]+8]]+14</Address>
+              <Address>[[[gw+18]+8]+10]+14</Address>
             </CheatEntry>
             <CheatEntry>
               <ID>1215</ID>
               <Description>"区域[0].m_dirtyCompletionAmount（置 0 防止游戏重算覆盖, bool 1 字节）"</Description>
               <LastState/>
               <VariableType>Byte</VariableType>
-              <Address>[[[gw+18]+8]]+18</Address>
+              <Address>[[[gw+18]+8]+10]+18</Address>
             </CheatEntry>
             <CheatEntry>
               <ID>1216</ID>

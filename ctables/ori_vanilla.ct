@@ -186,7 +186,7 @@
           <Description>"Ctrl+2 100% 探索 — GameWorld.RuntimeAreas(gw+18) → _items+8/_size+C → 区域 m_completionAmount(+14)"</Description>
           <LastState/>
           <VariableType>Float</VariableType>
-          <Address>[[[gw+18]+8]]+14</Address>
+          <Address>[[[gw+18]+8]+10]+14</Address>
         </CheatEntry>
         <CheatEntry>
           <ID>2303</ID>

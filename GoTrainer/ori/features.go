@@ -714,6 +714,63 @@ func (g *multiFloatMul) OnDeactivate(r *Runtime) {
 	}
 }
 
+// ---------- 无限能力点数（含等级门槛修正）----------
+
+// skillPointsRefill 无限能力点数。
+//
+// 除了把 SkillPoints 补到目标值，还会把 SeinLevel.Current（等级）从 0 修正为 1：
+//
+//	源码: SeinSoulFlame.AllowedToAccessSkillTree
+//	      => m_sein.Level.Current > 0 && IsSafeToCastSoulFlame == Safe
+//
+// 而 Current 只在 LevelUp() 里 ++，**全新存档（还没升过级）它就是 0**，
+// 于是技能树一直打不开、能力点花不出去（实测踩到：玩家看到 "进不去灵魂链接"）。
+// 只在它 == 0 时改写，不会影响正常存档的等级。
+type skillPointsRefill struct {
+	f       *Feature
+	target  int32
+	sawFix  bool // 本次激活期间修正过等级（状态提示用）
+	sawFull bool // 本次激活期间补过点数
+}
+
+func (g *skillPointsRefill) Tick(r *Runtime) {
+	if !g.f.Active() {
+		return
+	}
+	_, level, _, _, _, _ := r.Addrs()
+	if level == 0 {
+		g.f.setStatus("地址解析失败")
+		return
+	}
+	lv, ok := r.Proc.ReadI32(level + OffLevelCurrent)
+	if !ok {
+		g.f.setStatus("读取等级失败")
+		return
+	}
+	if lv <= 0 && r.Proc.WriteI32(level+OffLevelCurrent, 1) {
+		g.sawFix = true
+	}
+	sp, ok := r.Proc.ReadI32(level + OffLevelSkillPoints)
+	if !ok {
+		g.f.setStatus("读取能力点失败")
+		return
+	}
+	if sp < g.target && r.Proc.WriteI32(level+OffLevelSkillPoints, g.target) {
+		g.sawFull = true
+		sp = g.target
+	}
+	switch {
+	case g.sawFix && g.sawFull:
+		g.f.setStatus(fmt.Sprintf("已补满 = %d；等级 0→1（技能树需等级>0）", g.target))
+	case g.sawFix:
+		g.f.setStatus(fmt.Sprintf("就绪 = %d；等级已修正 0→1（技能树需等级>0）", sp))
+	case g.sawFull:
+		g.f.setStatus(fmt.Sprintf("已补满到 %d", g.target))
+	default:
+		g.f.setStatus(fmt.Sprintf("已就绪 = %d", sp))
+	}
+}
+
 // ---------- 100% 探索 ----------
 
 // explore100 把所有已加载区域的完成度置为 1（即 100%）。
@@ -748,8 +805,15 @@ func (g *explore100) Tick(r *Runtime) {
 	}
 	done := 0
 	for i := int32(0); i < size; i++ {
-		area, ok := r.Proc.ReadU32(items + uint32(i)*4)
+		// ⚠ 元素从 items+0x10 开始（items 指向的是"数组对象"，前面有
+		// vtable/monitor/bounds/max_length 四个 dword）。
+		area, ok := r.Proc.ReadU32(items + OffArrayData + uint32(i)*4)
 		if !ok || !isHeapPtr(area) {
+			continue
+		}
+		// 类名校验: 防止元素基址算错时把值写进别的结构（曾经因此写进数组类
+		// 的元数据区）。多花 2~3 次读，换"绝不写错对象"，值得。
+		if nm, _, ok2 := r.classOf(r.Proc, area); !ok2 || nm != "RuntimeGameWorldArea" {
 			continue
 		}
 		if r.Proc.WriteF32(area+OffAreaCompletion, 1.0) {
@@ -919,13 +983,6 @@ func BuildFeatures() []*Feature {
 	// ---- 字段地址闭包 ----
 	// 注意: 所有闭包一律通过 r.Addrs() 取地址（内部加锁）。
 	// 后台 Refresh 会并发改写 Runtime 的地址字段，直接读会构成数据竞争。
-	lvlSP := func(r *Runtime) (uint32, bool) {
-		_, level, _, _, _, _ := r.Addrs()
-		if level == 0 {
-			return 0, false
-		}
-		return level + OffLevelSkillPoints, true
-	}
 	// healthObj 解析 SeinCharacter -> Mortality -> HealthController 链。
 	healthObj := func(r *Runtime) (uint32, bool) {
 		sein, _, _, _, _, _ := r.Addrs()
@@ -1030,9 +1087,10 @@ func BuildFeatures() []*Feature {
 		return f
 	}
 	// 能力点数: 不足才补满（见 setIntMin 说明）。
-	newIntMin := func(digit int, name string, get func(*Runtime) (uint32, bool), target int32) *Feature {
-		f := NewFeature(digit, name)
-		allTickers = append(allTickers, &setIntMin{f: f, get: get, target: target})
+	// 无限能力点数（含"等级 0 → 1"修正，见 skillPointsRefill 说明）
+	newSkillPoints := func(digit int, target int32) *Feature {
+		f := NewFeature(digit, "无限能力点数")
+		allTickers = append(allTickers, &skillPointsRefill{f: f, target: target})
 		return f
 	}
 	newGrantAll := func(digit int) *Feature {
@@ -1069,7 +1127,7 @@ func BuildFeatures() []*Feature {
 		newSoulFlameAnywhere(4),
 		newSuperJump(5, 2.5),
 		newInfiniteDoubleJump(6),
-		newIntMin(7, "无限能力点数", lvlSP, 99),
+		newSkillPoints(7, 99),
 		// ===== 进阶能力: Ctrl+小键盘（顺序接续）=====
 		newCtrlCounterLock(1, "死亡数归零", deaths, 0),
 		newExplore100(2),

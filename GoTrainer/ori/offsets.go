@@ -76,6 +76,7 @@ const (
 	// SeinLevel
 	OffLevelMSein       = 0x20
 	OffLevelSkillPoints = 0x24
+	OffLevelCurrent     = 0x28 // 等级：**技能树开启条件是 Current > 0**
 	OffLevelExperience  = 0x2C
 
 	// SeinDeathCounter
@@ -145,9 +146,15 @@ const (
 	OffGameWorldRuntimeAreas = 0x18
 	OffAreaCompletion        = 0x14 // RuntimeGameWorldArea.m_completionAmount (float, 0..1)
 	OffAreaCompletionDirty   = 0x18 // RuntimeGameWorldArea.m_dirtyCompletionAmount (bool)
-	// List<T> 布局（.NET）: +0x08 _items, +0x0C _size
+	// List<T> / 数组布局（mono，32 位）:
+	//   List:  +0x08 _items（指向数组对象）, +0x0C _size
+	//   数组:  +0x00 vtable, +0x04 monitor, +0x08 bounds, +0x0C max_length,
+	//          **+0x10 起才是元素**
+	// ⚠ 曾经把 _items 当元素起点（+i*4）使用，导致元素整体错位 4 个：
+	//   既漏写了后半部分区域，又把值写进了数组类的元数据区。见 README §8。
 	OffListItems = 0x08
 	OffListSize  = 0x0C
+	OffArrayData = 0x10 // 数组元素起始偏移
 )
 
 // 生命值单位换算。
