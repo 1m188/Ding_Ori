@@ -56,9 +56,11 @@ type Runtime struct {
 	DeathCounter   uint32 // SeinDeathCounter.Instance
 	DiffController uint32 // DifficultyController.Instance
 	GameWorld      uint32 // GameWorld.Instance（探索度所在）
+	GameTimer      uint32 // GameTimer.Instance（游玩计时器，"重置时间"用）
 	deathSlot      uint32 // 上述单例的静态槽地址（重读用）
 	diffSlot       uint32
 	worldSlot      uint32
+	timerSlot      uint32
 
 	// 定位诊断
 	LastScanError string // 失败原因（UI 显示）
@@ -90,9 +92,11 @@ func (r *Runtime) SetProcess(p *core.Process) {
 	r.DeathCounter = 0
 	r.DiffController = 0
 	r.GameWorld = 0
+	r.GameTimer = 0
 	r.deathSlot = 0
 	r.diffSlot = 0
 	r.worldSlot = 0
+	r.timerSlot = 0
 	r.LastScanError = ""
 	r.auxBusy = false
 	r.auxTried = time.Time{}
@@ -132,6 +136,23 @@ func (r *Runtime) GameWorldAddr() uint32 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.GameWorld
+}
+
+// TimerAddr 返回当前活体 GameTimer 对象地址（"重置时间"用）。
+//
+// 每次都从缓存的静态槽重读，而不是信任缓存的对象指针：换场景/读档时
+// 游戏会重建 GameTimer 并改写 GameTimer.Instance。对象地址可能低于
+// minObjAddr（实测 0x2Fxxxxxx），故类名校验用 minObjLowAddr。
+// 未定位返回 0。
+func (r *Runtime) TimerAddr() uint32 {
+	r.mu.Lock()
+	slot := r.timerSlot
+	p := r.Proc
+	r.mu.Unlock()
+	if slot == 0 || p == nil {
+		return 0
+	}
+	return r.auxFromSlot(p, slot, "GameTimer")
 }
 
 // SubAddr 返回已定位子对象的地址（诊断/测试用）。
@@ -195,11 +216,20 @@ func f32at(buf []byte, off int) float32 {
 const (
 	maxUserAddr = 0xFFFF0000 // 32 位用户空间上限（保守留出保留区）
 	minObjAddr  = 0x40000000 // 托管堆对象下界（低区为代码/JIT/元数据）
+	// minObjLowAddr 是"早期构造对象"的下界。GameController / GameTimer 在
+	// 游戏启动早期就 new 出来，实测落在 0x2A/0x2F 段，低于 minObjAddr；
+	// 用 minObjAddr 过滤会导致这两个单例永远定位不到（见 README §8）。
+	minObjLowAddr = 0x10000000
 )
 
 // isHeapPtr 判断是否可能是 32 位托管堆对象指针。
 func isHeapPtr(v uint32) bool {
 	return v >= minObjAddr && v < maxUserAddr && v&3 == 0
+}
+
+// isObjPtrLow 同 isHeapPtr，但允许早期构造对象所在的低托管带。
+func isObjPtrLow(v uint32) bool {
+	return v >= minObjLowAddr && v < maxUserAddr && v&3 == 0
 }
 
 // isPtr 判断是否可能是任意用户空间指针（vtable/klass 等，要求 4 字节对齐）。
@@ -231,7 +261,13 @@ func isTextPtr(v uint32) bool {
 //     而堆上垃圾数据偶然凑出的"假 klass"几乎不可能满足，实测用它排除了
 //     所有假阳性。
 func (r *Runtime) classOf(p *core.Process, obj uint32) (string, uint32, bool) {
-	if !isHeapPtr(obj) {
+	return r.classOfMin(p, obj, minObjAddr)
+}
+
+// classOfMin 同 classOf，但对象下界可下调。GameController / GameTimer 这类
+// 启动早期构造的对象落在 minObjAddr 之下，需用 minObjLowAddr 才能识别。
+func (r *Runtime) classOfMin(p *core.Process, obj, min uint32) (string, uint32, bool) {
+	if obj < min || obj >= maxUserAddr || obj&3 != 0 {
 		return "", 0, false
 	}
 	vt, ok := p.ReadU32(obj)
@@ -511,7 +547,7 @@ func (r *Runtime) Refresh() bool {
 
 	r.refreshChain(p, sein)
 	r.mu.Lock()
-	needAux := changed || r.DeathCounter == 0 || r.DiffController == 0
+	needAux := changed || r.DeathCounter == 0 || r.DiffController == 0 || r.GameTimer == 0
 	r.mu.Unlock()
 	if needAux {
 		r.resolveAux(p, sein)
@@ -524,13 +560,14 @@ type auxFound struct {
 	death, deathSlot uint32
 	diff, diffSlot   uint32
 	world, worldSlot uint32
+	timer, timerSlot uint32
 }
 
 // refreshAuxSlots 以已缓存的静态槽为准重读附属单例；
 // 槽失效时清空，交由 resolveAux 重新扫描。
 func (r *Runtime) refreshAuxSlots(p *core.Process) {
 	r.mu.Lock()
-	ds, dfs, ws := r.deathSlot, r.diffSlot, r.worldSlot
+	ds, dfs, ws, ts := r.deathSlot, r.diffSlot, r.worldSlot, r.timerSlot
 	r.mu.Unlock()
 
 	setOrClear := func(slot uint32, want string, dst *uint32, clearSlot *uint32) {
@@ -551,15 +588,16 @@ func (r *Runtime) refreshAuxSlots(p *core.Process) {
 	setOrClear(ds, "SeinDeathCounter", &r.DeathCounter, &r.deathSlot)
 	setOrClear(dfs, "DifficultyController", &r.DiffController, &r.diffSlot)
 	setOrClear(ws, "GameWorld", &r.GameWorld, &r.worldSlot)
+	setOrClear(ts, "GameTimer", &r.GameTimer, &r.timerSlot)
 }
 
 // auxFromSlot 重读静态槽并确认其中对象仍属于期望类型。
 func (r *Runtime) auxFromSlot(p *core.Process, slot uint32, want string) uint32 {
 	v, ok := p.ReadU32(slot)
-	if !ok || !isHeapPtr(v) {
+	if !ok || !isObjPtrLow(v) {
 		return 0
 	}
-	if nm, _, ok := r.classOf(p, v); !ok || nm != want {
+	if nm, _, ok := r.classOfMin(p, v, minObjLowAddr); !ok || nm != want {
 		return 0
 	}
 	return v
@@ -589,7 +627,8 @@ func (r *Runtime) resolveAux(p *core.Process, sein uint32) {
 	needDeath := r.DeathCounter == 0
 	needDiff := r.DiffController == 0
 	needWorld := r.GameWorld == 0
-	if !needDeath && !needDiff && !needWorld {
+	needTimer := r.GameTimer == 0
+	if !needDeath && !needDiff && !needWorld && !needTimer {
 		r.mu.Unlock()
 		return
 	}
@@ -628,6 +667,11 @@ func (r *Runtime) resolveAux(p *core.Process, sein uint32) {
 			r.worldSlot = found.worldSlot
 			gotAny = true
 		}
+		if needTimer && found.timer != 0 {
+			r.GameTimer = found.timer
+			r.timerSlot = found.timerSlot
+			gotAny = true
+		}
 		if gotAny {
 			r.auxFails = 0
 		}
@@ -657,7 +701,7 @@ func scanLowBandAux(p *core.Process, sein uint32) auxFound {
 	const chunk = 4 << 20
 	cache := map[uint32]string{}
 	classOfAt := func(obj uint32) string {
-		if !isHeapPtr(obj) {
+		if !isObjPtrLow(obj) {
 			return ""
 		}
 		vt, ok := p.ReadU32(obj)
@@ -701,11 +745,46 @@ func scanLowBandAux(p *core.Process, sein uint32) auxFound {
 			}
 			for i := 0; i+4 <= len(b); i += 4 {
 				v := u32at(b, i)
-				if !isHeapPtr(v) || seen[v] {
+				if !isObjPtrLow(v) || seen[v] {
 					continue
 				}
 				seen[v] = true
 				slot := reg.Base + off + uint32(i)
+				if out.timer == 0 {
+					// GameTimer: 用三个 float 字段的取值区间做便宜预筛，
+					// 通过后再做类名解析（GameTimer 对象可能在 0x2F 段，
+					// 低于 minObjAddr，故用 isObjPtrLow/classOfAt 的低下界）。
+					var fb [12]byte
+					if p.ReadBytes(v+OffTimerCurrentTime, fb[:]) {
+						cur := f32at(fb[:], 0)
+						wait := f32at(fb[:], 4)
+						tele := f32at(fb[:], 8)
+						if cur >= -0.01 && cur <= 1e8 &&
+							wait >= -0.01 && wait <= 1.5 &&
+							tele >= -0.01 && tele <= 61 {
+							if classOfAt(v) == "GameTimer" {
+								out.timer, out.timerSlot = v, slot
+							}
+						}
+					}
+				}
+				if out.diff == 0 {
+					// DifficultyController: 用 Difficulty/LowestDifficulty 两个
+					// 小整数做预筛，再做类名解析。
+					// ⚠ 它和 GameTimer 一样是启动早期对象（实测 0x2FCD26A0，
+					// 低于 minObjAddr），必须放在 isHeapPtr 那道下界门**之前**，
+					// 否则永远定位不到（见 README §8-22）。
+					d1, ok1 := p.ReadI32(v + OffDiffDifficulty)
+					d2, ok2 := p.ReadI32(v + OffDiffLowest)
+					if ok1 && ok2 && d1 >= 0 && d1 <= 3 && d2 >= 0 && d2 <= 3 {
+						if classOfAt(v) == "DifficultyController" {
+							out.diff, out.diffSlot = v, slot
+						}
+					}
+				}
+				if !isHeapPtr(v) {
+					continue
+				}
 				if deathAny == 0 {
 					if d, ok := p.ReadI32(v + OffDeathCounterValue); ok && d >= 0 && d <= 1000000 {
 						if classOfAt(v) == "SeinDeathCounter" {
@@ -715,15 +794,6 @@ func scanLowBandAux(p *core.Process, sein uint32) auxFound {
 								}
 							}
 							deathAny, deathAnySlot = v, slot
-						}
-					}
-				}
-				if out.diff == 0 {
-					d1, ok1 := p.ReadI32(v + OffDiffDifficulty)
-					d2, ok2 := p.ReadI32(v + OffDiffLowest)
-					if ok1 && ok2 && d1 >= 0 && d1 <= 3 && d2 >= 0 && d2 <= 3 {
-						if classOfAt(v) == "DifficultyController" {
-							out.diff, out.diffSlot = v, slot
 						}
 					}
 				}
@@ -744,8 +814,8 @@ func scanLowBandAux(p *core.Process, sein uint32) auxFound {
 		out.death, out.deathSlot = deathAny, deathAnySlot
 	}
 	if debugAux {
-		fmt.Fprintf(os.Stderr, "[aux] sein=%08X cand=%d death=%08X slot=%08X diff=%08X dslot=%08X world=%08X wslot=%08X\n",
-			sein, len(seen), out.death, out.deathSlot, out.diff, out.diffSlot, out.world, out.worldSlot)
+		fmt.Fprintf(os.Stderr, "[aux] sein=%08X cand=%d death=%08X slot=%08X diff=%08X dslot=%08X world=%08X wslot=%08X timer=%08X tslot=%08X\n",
+			sein, len(seen), out.death, out.deathSlot, out.diff, out.diffSlot, out.world, out.worldSlot, out.timer, out.timerSlot)
 	}
 	return out
 }

@@ -157,6 +157,31 @@ const (
 	OffArrayData = 0x10 // 数组元素起始偏移
 )
 
+// GameTimer 字段偏移（游玩计时器；"重置时间"功能用）。
+//
+// 载体: GameController.Timer(+0x14) 指向 GameTimer；该类另有静态单例
+// GameTimer.Instance（可用它直接定位活体实例）。
+//
+//	CurrentTime          +0x1C  float 秒 —— 累计游玩时间
+//	                     FixedUpdate() 里 `CurrentTime += Time.deltaTime`
+//	                     （主菜单/扩展标题界面/加载中会提前 return，暂停时
+//	                     Time.timeScale=0 → deltaTime=0，因此不增长）。
+//	m_waitTillSave       +0x20  float ∈[0,1]，内部每秒刷新节流（校验用）
+//	m_sendTelemetryTimer +0x24  float ∈[0,60]，遥测发送计时（校验用）
+//
+// 暂停界面显示: TimeCounterDisplay.Update() 每 1 秒读
+// GameController.Instance.Timer.DisplayTimeAsString → 由 CurrentTime 派生，
+// 所以把 CurrentTime 写 0 后最多 1 秒界面同步显示 0。
+//
+// ⚠ CurrentTime 是"值语义"（累加器），不是指针派生值：直接写 0 即可，
+//
+//	不存在被游戏重算覆盖的问题；开启期间持续写 0 就等于冻结在 0。
+const (
+	OffTimerCurrentTime  = 0x1C
+	OffTimerWaitTillSave = 0x20
+	OffTimerTelemetry    = 0x24
+)
+
 // 生命值单位换算。
 //
 // SeinHealthController.HealthUpgradesCollected => MaxHealth/4 - 3，
