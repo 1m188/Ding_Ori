@@ -336,7 +336,6 @@ type app struct {
 	selCursor int // 版本选择光标
 	navCursor int // 修改器界面：当前选中的功能项（前台导航用）
 	chosen    bool
-	msg       atomic.Value
 	help      atomic.Bool
 }
 
@@ -387,41 +386,26 @@ func (a *app) navToggle(s *session, idx int) {
 	}
 	e := list[idx]
 	if e.feat == nil {
-		toggleOneLife(a)
+		toggleOneLife()
 		return
 	}
-	toggleFeature(a, s, e.feat)
+	toggleFeature(s, e.feat)
 }
 
 // toggleOneLife 切换一命保护。
-func toggleOneLife(a *app) {
+func toggleOneLife() {
 	ol := ori.OneLife()
-	on := !ol.Active()
-	ol.SetActive(on)
-	if on {
-		a.setMsg("已激活: 一命保护 — 死亡正常复活、难度=Easy，成就资格保留")
-	} else {
-		a.setMsg("已关闭: 一命保护")
-	}
+	ol.SetActive(!ol.Active())
 }
 
 // toggleFeature 切换单个功能（含可还原型的状态回滚）。
-func toggleFeature(a *app, s *session, f *ori.Feature) {
+func toggleFeature(s *session, f *ori.Feature) {
 	if f.Active() {
 		ori.DeactivateFeature(f, s.r)
-		a.setMsg(fmt.Sprintf("已关闭: %s", f.Name))
 		return
 	}
 	ori.ActivateFeature(f)
-	if f.FixedTarget != nil {
-		a.setMsg(fmt.Sprintf("已激活: %s — 锁定为 %d", f.Name, *f.FixedTarget))
-	} else {
-		a.setMsg(fmt.Sprintf("已激活: %s", f.Name))
-	}
 }
-
-func (a *app) setMsg(s string) { a.msg.Store(s) }
-func (a *app) getMsg() string  { s, _ := a.msg.Load().(string); return s }
 
 func (a *app) current() *session {
 	a.mu.Lock()
@@ -441,9 +425,6 @@ func (a *app) choose(prof ori.Profile) {
 	if p, err := core.Attach(prof.ProcessName); err == nil {
 		s.setProc(p)
 		s.r.SetProcess(p)
-		a.msg.Store(fmt.Sprintf("已附加 %s (PID %d)。", prof.ProcessName, p.Pid))
-	} else {
-		a.msg.Store(fmt.Sprintf("游戏 %s 未运行——启动游戏后自动附加。", prof.ProcessName))
 	}
 	// 启动会话协程: 附加看护/堆扫描 + 功能引擎
 	go a.sessionWatch(s)
@@ -471,7 +452,6 @@ func renderSelector(a *app) {
 
 	b.WriteString("\n" + cBox + "  ────────────────────────────────────────────────────────\n" + cReset)
 	b.WriteString("  " + cWhite + "↑/↓" + cReset + " 选择   " + cWhite + "回车" + cReset + " 进入\n")
-	b.WriteString("  " + cDim + a.getMsg() + cReset + "\n")
 
 	render(b.String())
 }
@@ -558,11 +538,7 @@ func statusColor(status string, active bool) string {
 func (a *app) sessionWatch(s *session) {
 	// 看护协程是长期运行的后台任务: 任何未捕获 panic 都会让整个进程退出。
 	// 这里兜底恢复并提示，避免"修改器无故消失"。
-	defer func() {
-		if rec := recover(); rec != nil {
-			a.setMsg(fmt.Sprintf("内部错误（看护协程已恢复）: %v", rec))
-		}
-	}()
+	defer func() { _ = recover() }()
 	for {
 		a.mu.Lock()
 		stillCurrent := a.sess == s
@@ -576,27 +552,16 @@ func (a *app) sessionWatch(s *session) {
 			if p, err := core.Attach(s.prof.ProcessName); err == nil {
 				s.setProc(p)
 				s.r.SetProcess(p)
-				a.setMsg(fmt.Sprintf("已附加 %s (PID %d)。", s.prof.ProcessName, p.Pid))
 				time.Sleep(time.Second)
 			}
 		}
-		if !s.r.HasSein() {
-			if s.r.Refresh() {
-				a.setMsg("已定位游戏对象，可以使用功能了。")
-			}
-		} else {
-			s.r.Refresh()
-		}
+		s.r.Refresh()
 		time.Sleep(2 * time.Second)
 	}
 }
 
 func (a *app) engineLoop(s *session) {
-	defer func() {
-		if rec := recover(); rec != nil {
-			a.setMsg(fmt.Sprintf("内部错误（功能引擎已恢复）: %v", rec))
-		}
-	}()
+	defer func() { _ = recover() }()
 	for {
 		a.mu.Lock()
 		stillCurrent := a.sess == s
@@ -615,7 +580,6 @@ func (a *app) engineLoop(s *session) {
 
 func main() {
 	a := &app{}
-	a.setMsg("")
 
 	// 退出兜底: 主协程若 panic（未预期路径），也要先做一次统一收尾再退出，
 	// 避免"程序没了但游戏的修改还留着"的未定义状态。
@@ -704,7 +668,6 @@ func main() {
 			a.sess = nil
 			a.chosen = false
 			a.mu.Unlock()
-			a.setMsg("已返回版本选择。")
 			time.Sleep(200 * time.Millisecond)
 			continue
 		}
@@ -713,17 +676,14 @@ func main() {
 			// 否则（已全开）关闭全部。均不离开会话。
 			if ori.AllActive(s.feats) {
 				ori.DeactivateAll(s.feats, s.r)
-				a.setMsg("已关闭全部功能")
 			} else {
 				ori.ActivateAll(s.feats)
-				a.setMsg("已开启全部功能")
 			}
 		}
 		if f12Pressed {
 			// 重扫: 只断开重连，功能保持开启；地址在重新附加后刷新
 			s.closeProc()
 			s.r.SetProcess(nil)
-			a.setMsg("已重置，重新附加中…")
 		}
 		// ---- 全局热键：仅小键盘数字键（可配 Ctrl）----
 		// 两档键位，靠"修饰键状态精确匹配"互斥:
@@ -743,12 +703,12 @@ func main() {
 			hit := false
 			for _, f := range s.feats {
 				if f.Digit == digit && f.NeedCtrl == ctrlDown && f.NeedShift == shiftDown {
-					toggleFeature(a, s, f)
+					toggleFeature(s, f)
 					hit = true
 				}
 			}
 			if !hit && ctrlDown && !shiftDown && digit == ori.CtrlOneLifeDigit {
-				toggleOneLife(a)
+				toggleOneLife()
 			}
 		}
 		for i := 0; i < 9; i++ {
