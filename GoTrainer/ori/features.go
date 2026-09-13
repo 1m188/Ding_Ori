@@ -428,9 +428,23 @@ func (o *OneLifeProtect) SetActive(on bool) {
 func (o *OneLifeProtect) Status() string { return o.status.Load().(string) }
 
 // Name 功能名。
-func (o *OneLifeProtect) Name() string { return "一命保护（死亡如普通模式）" }
+func (o *OneLifeProtect) Name() string { return "一命保护（死亡不清档）" }
 
-// Tick 每周期执行: 若检测到一命难度，则把 Difficulty 锁为 Normal。
+// Tick 每周期执行: 若这是"一命"存档（LowestDifficulty == OneLife），
+// 把当前 Difficulty 顶成 Easy。原理:
+//
+//   - 死亡时游戏读的是 `DifficultyController.Instance.Difficulty`，等于
+//     OneLife 才会执行「WasKilled=true → 立即存档 → 删备份 → GameOver」，
+//     并在下次读档时清档。把它变成 Easy，这条链整条不成立，死亡退化为
+//     普通模式（在存档点复活）。
+//   - Easy 顺带降低难度：非岩浆/尖刺伤害减半、敌人血量 ×0.65
+//     （SeinDamageReciever 的难度 switch / Enemy.ScaleHealth，只有
+//     Easy/Hard 有特殊分支；OneLife 与 Normal 走默认，伤害相同）。
+//   - **绝不写 LowestDifficulty(+0x1C)**：成就是否算"一命通关"只读它
+//     （BeatOneLifeAchievementAsset），写它会毁掉成就资格。
+//   - 只在 `LowestDifficulty == OneLife` 时介入，普通/困难存档不受影响。
+//
+// 关闭功能时**不还原**难度（保护是"粘性"的）：避免误关一下就恢复一命。
 func (o *OneLifeProtect) Tick(r *Runtime) {
 	if !o.active.Load() {
 		return
@@ -448,7 +462,7 @@ func (o *OneLifeProtect) Tick(r *Runtime) {
 	}
 	o.lastLo.Store(low)
 
-	// 仅在一命难度下介入（其他难度无需保护，也避免多余写入）
+	// 仅在一命存档下介入（其他难度无需保护，也避免改动玩家选择的难度）
 	if low != DiffOneLife {
 		o.status.Store(fmt.Sprintf("当前非一命难度(Lowest=%d)，未介入", low))
 		o.locked.Store(false)
@@ -460,20 +474,17 @@ func (o *OneLifeProtect) Tick(r *Runtime) {
 		o.status.Store("读取失败")
 		return
 	}
-	if cur == DiffOneLife {
-		if r.Proc.WriteI32(addr, DiffNormal) {
-			o.locked.Store(true)
-			o.status.Store("已锁定 ✓ 死亡将正常复活")
-		} else {
-			o.status.Store("写入失败")
-		}
+	if cur == DiffEasy {
+		o.locked.Store(true)
+		o.status.Store(fmt.Sprintf("保护中 ✓ 难度=Easy（Lowest=%d 一命记录已保留）", low))
 		return
 	}
-	// 已被锁定（或游戏自身写回）
-	if o.locked.Load() {
-		o.status.Store(fmt.Sprintf("保护中 ✓ (Difficulty=%d, Lowest=%d 已保留)", cur, low))
+	// cur 可能是 OneLife（刚读档/重开一命）或游戏重置成的 Normal —— 一律顶成 Easy。
+	if r.Proc.WriteI32(addr, DiffEasy) {
+		o.locked.Store(true)
+		o.status.Store("已锁定 ✓ 死亡正常复活；难度=Easy（伤害减半/敌人血量降低）")
 	} else {
-		o.status.Store(fmt.Sprintf("Difficulty=%d", cur))
+		o.status.Store("写入失败")
 	}
 }
 
