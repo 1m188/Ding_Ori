@@ -532,7 +532,7 @@ func renderTrainer(a *app, s *session) {
 
 	b.WriteString(cBox + "  ────────────────────────────────────────────────────────\n" + cReset)
 	b.WriteString("  " + cDim + "本窗口: ↑↓ 选择 · 回车/空格 开关   |   " + cReset +
-		cWhite + "HOME" + cReset + " 全关   " + cWhite + "F12" + cReset + " 重扫   " +
+		cWhite + "HOME" + cReset + " 全开/全关   " + cWhite + "F12" + cReset + " 重扫   " +
 		cWhite + "F1" + cReset + " 帮助   " + cWhite + "ESC" + cReset + " 返回\n")
 
 	render(b.String())
@@ -709,9 +709,15 @@ func main() {
 			continue
 		}
 		if homePressed {
-			// 全关: 不离开会话，只还原/关闭全部功能
-			ori.DeactivateAll(s.feats, s.r)
-			a.setMsg("已关闭全部功能")
+			// 全开/全关切换: 只要还有未开启的功能就全部打开（已开的跳过），
+			// 否则（已全开）关闭全部。均不离开会话。
+			if ori.AllActive(s.feats) {
+				ori.DeactivateAll(s.feats, s.r)
+				a.setMsg("已关闭全部功能")
+			} else {
+				ori.ActivateAll(s.feats)
+				a.setMsg("已开启全部功能")
+			}
 		}
 		if f12Pressed {
 			// 重扫: 只断开重连，功能保持开启；地址在重新附加后刷新

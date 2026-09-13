@@ -685,6 +685,29 @@ func DeactivateAll(fs []*Feature, r *Runtime) {
 	oneLife.SetActive(false)
 }
 
+// ActivateAll 打开全部功能（已开启的跳过，只补开未开启的），含一命保护。
+//
+// 与 DeactivateAll 对称，供 HOME 的"全开/全关"切换使用。
+func ActivateAll(fs []*Feature) {
+	for _, f := range fs {
+		if f.Active() {
+			continue
+		}
+		ActivateFeature(f)
+	}
+	oneLife.SetActive(true)
+}
+
+// AllActive 是否所有功能都已开启（含一命保护）。
+func AllActive(fs []*Feature) bool {
+	for _, f := range fs {
+		if !f.Active() {
+			return false
+		}
+	}
+	return oneLife.Active()
+}
+
 // ---------- 能力点数：不足则补满 ----------
 
 // setIntMin 「不足才补满」整数执行器。
