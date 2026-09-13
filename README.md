@@ -854,6 +854,9 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
     → 修：新增 `ori.NewRuntime(prof)`，`main.go` 的 `newSession` 统一用它建
     Runtime，把"版本"绑进去；并用 `ori/resolver_profile_test.go` 锁住
     "版本 → 对象下界 / vtable 带"的绑定关系。
+    → 诊断: `oritrainer.exe -selftest` 不进入 TUI，直接对每个在运行的目标版本
+    跑一遍真实的"附加 + 定位"并打印结果（0=成功，退出码 1=有进程但定位失败，
+    2=目标都没运行），排查"界面一直扫描中"最快。
     → 另注意: 改了 Go 源码后必须**重新 `go build -o oritrainer.exe .`**——
     `go build ./...` 只做编译检查、不会更新仓库根目录那个 exe。
 
@@ -907,7 +910,8 @@ probe feats     → 键位表 + "无重复 ✓"
 4. **构建**：`cd GoTrainer && go build ./... && go vet ./...`
 5. **键位/顺序自检**：`probe feats`（确认无重复、档位正确、界面顺序由简到繁）。
 6. **实机验证**：`probe feat <数字> [秒] [-ctrl|-shift]`，看状态与目标内存值；
-   **写入型功能要验证"改回去/还原"也确实生效**。
+   **写入型功能要验证"改回去/还原"也确实生效**。定位类问题（一直扫描中）先用
+   `oritrainer.exe -selftest` 确认"真实二进制 + 真实会话"能定位。
 7. **同步文档**：
    - README：§5 偏移表、§6 功能表、§7 机制、§8 新踩的坑；
    - `ctables/ori_de.ct`：新增/修改对应记录（字段名与偏移与 `offsets.go` 一致）；

@@ -13,6 +13,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -592,8 +593,57 @@ func (a *app) engineLoop(s *session) {
 
 // ---------- main ----------
 
+// runSelfTest 非交互自检: 对每个正在运行的目标版本跑一次真实的
+// "附加 + 定位"流程，打印结果后退出。用于排查"界面一直扫描中"这类问题
+// （例如 exe 忘记重新构建、或版本/地址空间不匹配）。
+//
+//	oritrainer.exe -selftest
+//
+// 返回值即退出码: 0=至少一个版本定位成功；1=有进程但定位失败；2=都没在运行。
+func runSelfTest() int {
+	profiles := []ori.Profile{ori.Profiles[ori.Vanilla], ori.Profiles[ori.Definitive]}
+	tried, ok := 0, 0
+	for _, prof := range profiles {
+		fmt.Printf("=== %s (%s) ===\n", prof.DisplayName, prof.ProcessName)
+		p, err := core.Attach(prof.ProcessName)
+		if err != nil {
+			fmt.Printf("  未运行或附加失败: %v\n", err)
+			continue
+		}
+		tried++
+		s := newSession(prof) // ⚠ 必须走这里: 把版本绑到 Runtime
+		s.setProc(p)
+		s.r.SetProcess(p)
+		if s.r.Refresh() {
+			ok++
+			sein, level, _, jump, dbl, _ := s.r.Addrs()
+			fmt.Printf("  定位成功: SeinCharacter=0x%08X SeinLevel=0x%08X SeinJump=0x%08X DoubleJump=0x%08X\n",
+				sein, level, jump, dbl)
+		} else {
+			fmt.Printf("  定位失败: %s\n", s.r.LastScanError)
+		}
+		s.closeProc()
+		s.r.SetProcess(nil)
+	}
+	switch {
+	case tried == 0:
+		return 2
+	case ok == 0:
+		return 1
+	default:
+		return 0
+	}
+}
+
 func main() {
 	a := &app{}
+
+	// 非交互自检（诊断用）: 不进入 TUI。
+	for _, arg := range os.Args[1:] {
+		if arg == "-selftest" {
+			os.Exit(runSelfTest())
+		}
+	}
 
 	// 退出兜底: 主协程若 panic（未预期路径），也要先做一次统一收尾再退出，
 	// 避免"程序没了但游戏的修改还留着"的未定义状态。
