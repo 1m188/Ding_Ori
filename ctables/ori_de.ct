@@ -134,7 +134,7 @@
 
         <CheatEntry>
           <ID>1131</ID>
-          <Description>"4 可在不安全区域建立灵魂链接 — 长按判定确认后把 m_holdDownTime 写满 1.0"</Description>
+          <Description>"4 可在不安全区域建立灵魂链接 — 按住期间把 HoldDownDuration(+98) 置 +Inf 抑制蓄力回退，再把 m_holdDownTime(+94) 写 1.0；每次按键只施放一次（施放判定不含冷却，连写会刷存档）"</Description>
           <LastState/>
           <Color>0080FF</Color>
           <GroupHeader>1</GroupHeader>
@@ -145,6 +145,13 @@
               <LastState/>
               <VariableType>Float</VariableType>
               <Address>soulflame+94</Address>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>1135</ID>
+              <Description>"SeinSoulFlame.HoldDownDuration（蓄力时长, float, 默认 0.5）——不安全区它参与蓄力回退；临时置 +Inf 可让 1.0 保持到施放判定"</Description>
+              <LastState/>
+              <VariableType>Float</VariableType>
+              <Address>soulflame+98</Address>
             </CheatEntry>
             <CheatEntry>
               <ID>1133</ID>

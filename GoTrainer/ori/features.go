@@ -6,6 +6,7 @@ package ori
 
 import (
 	"fmt"
+	"math"
 
 	"sync"
 	"sync/atomic"
@@ -334,7 +335,7 @@ func (g *setInt) Tick(r *Runtime) {
 //	if (m_isCasting && CanAffordSoulFlame && IsSafeToCastSoulFlame == Safe && ...)
 //	    m_holdDownTime += Time.deltaTime / HoldDownDuration;
 //	else
-//	    m_holdDownTime -= ...;                       // 不安全时回退
+//	    m_holdDownTime -= Time.deltaTime / HoldDownDuration;   // 不安全时【回退】
 //
 //	// UpdateCharacterState(): 施放条件【不含任何安全检查】
 //	if (m_holdDownTime == 1f && m_sein.IsOnGround && m_delayOnGround == 0f)
@@ -343,12 +344,42 @@ func (g *setInt) Tick(r *Runtime) {
 // 即 IsSafeToCastSoulFlame（7 项判定：禁区/黑暗/存档台/敌人/重生点/无敌/地面射线）
 // 只用于控制蓄力是否累加，真正的施放不检查安全性。
 //
-// 因此本功能的做法: 当玩家按住链接键（m_isCasting=true）且满足施放前置
-// （在地面、无落地延迟）时，直接把蓄力 m_holdDownTime 写满 1.0f ——
-// 游戏下一帧就会执行 CastSoulFlame()，从而在不安全区域成功建立链接。
-// 这是纯数据写入方案，不需要代码补丁，也不修改任何安全判定本身。
+// ⚠ 只把 m_holdDownTime 写 1.0 是不够的（曾经这样实现，表现为"偶尔能建、多数不行"）:
+// HandleCharging() 与施放判定在**同一帧内、且回退在前**，不安全区每帧都会把
+// 我们写进去的 1.0 扣掉一点，判定 `== 1f` 就命中不了。
+//
+// 修法:
+//  1. 按住期间把 HoldDownDuration 置为 **+Inf** → 回退量 delta/Inf = 0，
+//     float32 下 1.0f 保持不变，1.0 能撑到施放判定（松开即还原原值）。
+//  2. **一次按键只施放一次**：施放判定不含冷却/安全性，若每帧都写 1.0，
+//     CastSoulFlame() 会被连续触发（它内部会 PerformSave + 计数 +1）→ 刷存档。
+//     因此以 m_isCasting 的"按下沿"武装，观察到 m_holdDownTime 被清 0
+//     （= CastSoulFlame 已执行）后本按键就不再写，直到松开再武装。
+//  3. 轻点窗口（m_tapRemainingTime > 0）内绝不干预，保留"轻点开技能树"。
 type soulFlameAnywhere struct {
-	f *Feature
+	f        *Feature
+	armed    bool    // 本次按住已写入 1.0，等待游戏施放
+	castDone bool    // 本次按住已完成一次施放
+	infDur   bool    // HoldDownDuration 当前是否被我们置为 +Inf
+	durObj   uint32  // 被改写 HoldDownDuration 的 SeinSoulFlame 地址
+	durOrig  float32 // HoldDownDuration 原值
+}
+
+// restoreDur 还原 HoldDownDuration（仅当对象未变，避免把旧值写到重建后的新对象）。
+func (g *soulFlameAnywhere) restoreDur(r *Runtime) {
+	if !g.infDur {
+		return
+	}
+	if sf := r.SubAddr("soulflame"); sf != 0 && sf == g.durObj {
+		r.Proc.WriteF32(sf+OffSoulFlameHoldDownDur, g.durOrig)
+	}
+	g.infDur = false
+}
+
+// OnDeactivate 关闭功能时还原 HoldDownDuration。
+func (g *soulFlameAnywhere) OnDeactivate(r *Runtime) {
+	g.restoreDur(r)
+	g.armed, g.castDone = false, false
 }
 
 func (g *soulFlameAnywhere) Tick(r *Runtime) {
@@ -362,32 +393,62 @@ func (g *soulFlameAnywhere) Tick(r *Runtime) {
 	}
 	p := r.Proc
 
+	// 对象被重建（重生/换场景）→ 之前改的是旧对象，放弃还原并重置状态
+	if g.durObj != 0 && sf != g.durObj {
+		g.infDur, g.armed, g.castDone = false, false, false
+	}
+
 	// 前置: 玩家正在按链接键（m_isCasting）
-	castFlag := make([]byte, 1)
-	if !p.ReadBytes(sf+OffSoulFlameCastFlag, castFlag) || castFlag[0] == 0 {
+	flag, ok := p.ReadU8(sf + OffSoulFlameCastFlag)
+	if !ok {
+		g.f.setStatus("读取失败")
+		return
+	}
+	if flag == 0 {
+		// 松开: 还原蓄力时长，重置"本次按住"状态
+		g.restoreDur(r)
+		g.armed, g.castDone = false, false
 		g.f.setStatus("待命（按住链接键时生效）")
 		return
 	}
-	// 前置: 在地面且无落地延迟（源码施放条件的一部分）
-	if delay, ok := p.ReadF32(sf + OffSoulFlameDelayOnGround); ok && delay > 0 {
-		g.f.setStatus("落地延迟中…")
+	if g.castDone {
+		g.f.setStatus("本次按键已建立链接（松开后可再建）")
 		return
 	}
-	// 关键: 若仍处于"轻点"窗口内（m_tapRemainingTime > 0），绝不干预。
-	//
-	// 游戏用同一按键区分两种操作（见 SeinSoulFlame.UpdateCharacterState）:
-	//   轻点（按下后 0.3 秒内松开）→ 打开技能树
-	//   长按（超过 0.3 秒）        → 就地建立灵魂链接
-	// 判定依据是 m_tapRemainingTime: 按下时置 0.3 并递减，归零后才是长按。
-	// 若在轻点窗口内就把 m_holdDownTime 写满，游戏会把这次按键当成"长按"，
-	// 轻点路径失效 —— 表现就是"建立链接后进不去技能界面"。
+	// 正在等待游戏施放: CastSoulFlame 会把 m_holdDownTime 清 0
+	if g.armed {
+		if cur, ok := p.ReadF32(sf + OffSoulFlameHoldDown); ok && cur == 0 {
+			g.castDone = true
+			g.f.setStatus("已建立链接 ✓（不安全区域/不稳定地面）")
+		} else {
+			g.f.setStatus("等待落地施放…（需站在地面上）")
+		}
+		return
+	}
+	// 轻点窗口内不干预（保护"轻点开技能树"）
 	if tap, ok := p.ReadF32(sf + OffSoulFlameTapRemaining); ok && tap > 0 {
 		g.f.setStatus("轻点窗口内（松开即开技能树）")
 		return
 	}
-	// 核心: 此时确认是长按，把蓄力写满，跳过安全判定的累加过程
+
+	// 武装本次长按: 抑制蓄力回退 + 清落地延迟 + 写满蓄力
+	if !g.infDur {
+		if orig, ok := p.ReadF32(sf + OffSoulFlameHoldDownDur); ok {
+			// 防御: 若上次是"按住期间终端被关闭"残留的 +Inf/异常值，回退到默认
+			// 0.5，避免把异常值当成"原值"再还原（否则会永久卡在 +Inf，蓄力再也满不了）。
+			if math.IsInf(float64(orig), 0) || math.IsNaN(float64(orig)) || orig <= 0 {
+				orig = 0.5
+			}
+			g.durObj, g.durOrig = sf, orig
+			if p.WriteF32(sf+OffSoulFlameHoldDownDur, float32(math.Inf(1))) {
+				g.infDur = true
+			}
+		}
+	}
+	p.WriteF32(sf+OffSoulFlameDelayOnGround, 0)
 	if p.WriteF32(sf+OffSoulFlameHoldDown, 1.0) {
-		g.f.setStatus("已强制蓄力 ✓ 可在此区域建链接")
+		g.armed = true
+		g.f.setStatus("已强制蓄力 ✓ 等待施放…")
 	} else {
 		g.f.setStatus("写入失败")
 	}
@@ -547,7 +608,7 @@ func DeactivateFeature(f *Feature, r *Runtime) {
 		return
 	}
 	// 可还原型执行器: setFloat / multiFloatMul（倍率放大）、
-	// infiniteDoubleJump（能力开关）
+	// infiniteDoubleJump（能力开关）、soulFlameAnywhere（HoldDownDuration）
 	tickersMu.RLock()
 	snapshot := allTickers
 	tickersMu.RUnlock()
@@ -572,6 +633,14 @@ func DeactivateFeature(f *Feature, r *Runtime) {
 			}
 			goto done
 		case *infiniteDoubleJump:
+			if ex.f != f {
+				continue
+			}
+			if r != nil {
+				ex.OnDeactivate(r)
+			}
+			goto done
+		case *soulFlameAnywhere:
 			if ex.f != f {
 				continue
 			}

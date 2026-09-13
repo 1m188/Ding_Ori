@@ -138,7 +138,7 @@
         </CheatEntry>
         <CheatEntry>
           <ID>2204</ID>
-          <Description>"4 不安全区域建链接 — m_holdDownTime(+94) / m_tapRemainingTime(+B8)"</Description>
+          <Description>"4 不安全区域建链接 — HoldDownDuration(+98) 临时置 +Inf 抑制回退，再写 m_holdDownTime(+94)=1.0；每次按键只施放一次"</Description>
           <LastState/>
           <VariableType>Float</VariableType>
           <Address>soulflame+94</Address>

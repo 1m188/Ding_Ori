@@ -287,10 +287,17 @@ const (
 
 // SeinSoulFlame 施放控制字段（"不安全区域建链接"功能用）。
 // 源码依据（SeinSoulFlame.UpdateCharacterState / HandleCharging / CastSoulFlame）:
-//   - m_holdDownTime 只在"安全区域"判定通过时才累加（HandleCharging）
-//   - 但施放判定 if (m_holdDownTime == 1f && IsOnGround && m_delayOnGround == 0) CastSoulFlame()
-//     不含任何安全检查 —— 因此直接写满蓄力即可绕过全部 7 项安全判定
+//   - HandleCharging() 在"安全区域"判定通过时才累加 m_holdDownTime；
+//     否则走回退分支 m_holdDownTime -= deltaTime / HoldDownDuration
+//   - 施放判定 if (m_holdDownTime == 1f && IsOnGround && m_delayOnGround == 0) CastSoulFlame()
+//     不含任何安全检查 —— 直接写满蓄力即可绕过全部 7 项安全判定
+//
+// ⚠ 关键: 施放判定在同帧的 HandleCharging 之后，若只写 1.0 会被回退分支扣掉
+// （实测因此"偶尔能建、大多数时候不行"）。做法是按住期间把 HoldDownDuration
+// 置为 +Inf，使回退量 delta/Inf = 0（float32 下 1.0f - 0 仍是 1.0f），
+// 1.0 得以保持到施放判定；松开后还原原值。
 const (
 	OffSoulFlameCastFlag      = 0xBC // m_isCasting (bool) —— 玩家按住链接键
 	OffSoulFlameDelayOnGround = 0xC0 // m_delayOnGround (float) —— 落地延迟
+	OffSoulFlameHoldDownDur   = 0x98 // HoldDownDuration (float) —— 蓄力时长；临时置 +Inf 抑制回退
 )
