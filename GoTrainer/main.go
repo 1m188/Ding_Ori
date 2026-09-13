@@ -297,6 +297,18 @@ func (s *session) getProc() *core.Process {
 	return s.proc
 }
 
+// newSession 创建一个会话。
+//
+// ⚠ 必须把版本绑到 Runtime（ori.NewRuntime）上: 解析器要靠它调用 ApplyProfile
+// 设置"对象地址下界 / vtable 扫描带"，否则原版会一直卡在"Sein 扫描中…"。
+func newSession(prof ori.Profile) *session {
+	return &session{
+		prof:  prof,
+		r:     ori.NewRuntime(prof),
+		feats: ori.BuildFeatures(prof),
+	}
+}
+
 func (s *session) setProc(p *core.Process) {
 	s.procMu.Lock()
 	s.proc = p
@@ -421,7 +433,7 @@ func (a *app) choose(prof ori.Profile) {
 	teardownSession(a.current())
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	s := &session{prof: prof, r: &ori.Runtime{}, feats: ori.BuildFeatures(prof)}
+	s := newSession(prof)
 	ori.SetActiveRuntime(s.r) // 供经验倍率单选互斥还原数值
 	a.sess = s
 	a.chosen = true

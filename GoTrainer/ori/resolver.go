@@ -88,6 +88,17 @@ func (r *Runtime) Addrs() (sein, level, soul, jump, dbl, death uint32) {
 	return r.SeinCharacter, r.SeinLevel, r.SoulFlame, r.SeinJump, r.DoubleJump, r.DeathCounter
 }
 
+// NewRuntime 创建绑定版本的 Runtime。
+//
+// ⚠ 必须用本函数（或在 SetProcess 前手动设置 Prof）。SetProcess 依赖
+// r.Prof 调用 ApplyProfile 来设置"对象地址下界 / vtable 扫描带"——这两个值
+// 两个版本不同。若 Prof 为 nil，原版（低地址堆）会永远定位不到玩家对象，
+// 界面卡在"Sein 扫描中…"。
+func NewRuntime(p Profile) *Runtime {
+	pp := p
+	return &Runtime{Prof: &pp}
+}
+
 // SetProcess 绑定进程并重置解析状态。
 func (r *Runtime) SetProcess(p *core.Process) {
 	if r.Prof != nil {

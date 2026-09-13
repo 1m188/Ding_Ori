@@ -2626,7 +2626,7 @@ func cmdDiffStrict(p *core.Process) {
 // 模拟 UI 反复重建功能表（BuildFeatures）的同时，另一协程持续 TickAll，
 // 用于验证全局执行器列表的并发保护是否有效。
 func cmdRaceTest(p *core.Process) {
-	rt := &ori.Runtime{}
+	rt := ori.NewRuntime(probeProfile())
 	rt.SetProcess(p)
 	rt.Refresh()
 
