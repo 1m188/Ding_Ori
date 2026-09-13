@@ -88,6 +88,17 @@ func main() {
 		return
 	}
 	cmd := os.Args[1]
+
+	// 不依赖游戏进程的命令先处理（README §9 的"自测样例"依赖它们离线可跑）。
+	switch cmd {
+	case "feats":
+		cmdFeats()
+		return
+	case "conin":
+		cmdConIn()
+		return
+	}
+
 	prof := probeProfile()
 	p, err := core.Attach(prof.ProcessName)
 	if err != nil {
@@ -171,14 +182,10 @@ func main() {
 		cmdCoreReg(p)
 	case "racetest":
 		cmdRaceTest(p)
-	case "conin":
-		cmdConIn()
 	case "diffname":
 		cmdDiffName(p)
 	case "heapfind":
 		cmdHeapFind(p)
-	case "feats":
-		cmdFeats()
 	case "bases":
 		cmdBases(p)
 	case "strref":
@@ -212,6 +219,11 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `probe <command> [args]
+  feats                       功能/键位表 + 键位重复自检（不需要游戏）
+  conin                       控制台输入通路自检（不需要游戏）
+  snap                        打印所有功能依赖字段（换版本核验偏移首选）
+  fieldoff <类> <字段>        按字段名反查偏移
+  diag / keys / map / timer   定位链路与各功能字段核查
   info
   regions
   read  <hexaddr> <len>
@@ -1421,7 +1433,9 @@ func cmdStaticMap(p *core.Process) {
 //
 // 原理: 对象[0] = vtable 槽位 V，且 u32(V) == klass。V 可能位于元数据区
 // （非 MonoBehaviour 类）或堆区（MonoBehaviour 类），因此不限制 V 的地址。
-// 实例判据: 位于堆区 (>=0x40000000)、4 字节对齐、[4]==0。
+// 实例判据: 位于终极版堆带 (>=0x40000000)、4 字节对齐、[4]==0。
+// ⚠ 本命令的地址判据按终极版写死；原版请用 `snap`/`fieldoff`（走 Runtime，
+// 版本自适应）。
 func cmdInstances(p *core.Process) {
 	if len(os.Args) < 3 {
 		fmt.Println("usage: probe instances <ClassName>")
@@ -1522,8 +1536,9 @@ func cmdOffs(p *core.Process) {
 	want := os.Args[3:]
 	t0 := time.Now()
 
-	// 读取元数据/静态数据带（< 0x40000000）。mono 的类元数据在
-	// 0x2A-0x2B 段，静态字段数据在 0x06 段，两者都在此范围内。
+	// 读取元数据/静态数据带（< 0x40000000）：终极版类元数据在 0x2A-0x2B、
+	// 静态字段数据在 0x06 段，都在此范围内；原版元数据更靠上（klass/MonoVTable
+	// 在 0x35B7 段），本命令在原版可能读不全——原版请用 `fieldoff`。
 	type region struct {
 		base uint32
 		data []byte
@@ -1706,9 +1721,11 @@ func classOf(p *core.Process, obj uint32) (string, uint32, bool) {
 
 // classOfMin 同 classOf，但允许对象落在 min 以上的任意地址。
 //
-// 早期创建的对象（如 GameController/GameTimer，在过场/启动期就构造）
-// 可能位于 0x40000000 以下，用 classOf 会被下限直接拒掉；
+// 早期创建的对象（如终极版的 GameController/GameTimer，在过场/启动期就
+// 构造）可能位于 0x40000000 以下，用 classOf（下限 0x40000000）会被直接拒掉；
 // 需要放宽下限时用本函数（vtable/klass 仍要求 >= 0x08000000）。
+// ⚠ 这里的下限都是"终极版视角"的魔法数；原版的堆/元数据带完全不同，
+// 原版相关核查请用 `snap`/`fieldoff`。
 func classOfMin(p *core.Process, obj, min uint32) (string, uint32, bool) {
 	if obj < min || obj >= 0xFFFF0000 {
 		return "", 0, false
@@ -1874,9 +1891,10 @@ func cmdStrRef(p *core.Process) {
 //
 //	probe slotscan <ClassName> <loHex> <hiHex> [minObjHex]
 //
-// 与 singleton 的区别：范围显式给定（典型用途：mono 类静态字段块
+// 与 singleton 的区别：范围显式给定（典型用途：终极版 mono 类静态字段块
 // 0x063C0000-0x063E0000），且 minObj 可下调到 0x10000，用于定位
-// GameController/GameTimer 这类在启动早期、可能落在 0x40000000 以下的实例。
+// 启动早期、可能落在常规堆下界以下的实例。原版静态块不在该带，
+// 原版核查请用 `snap`/`fieldoff`。
 func cmdSlotScan(p *core.Process) {
 	if len(os.Args) < 5 {
 		fmt.Println("usage: probe slotscan <ClassName> <loHex> <hiHex> [minObjHex]")
@@ -2191,7 +2209,8 @@ func cmdFindClass(p *core.Process) {
 	}
 	fmt.Printf("vtable 候选: %d\n", len(vts))
 
-	// 实例: [0]==vtable 且 [4]==0 且位于堆区 (>=0x40000000)
+	// 实例: [0]==vtable 且 [4]==0 且位于终极版堆带 (>=0x40000000)
+	// ⚠ 原版堆在低地址，本命令判据不适用；原版请用 snap/fieldoff
 	seen := map[uint32]bool{}
 	var insts []uint32
 	for _, vt := range vts {
@@ -2427,11 +2446,11 @@ func cmdFeats() {
 	fs := ori.BuildFeatures(prof)
 	// 一命保护仅终极版存在（原版无难度/一命机制）。
 	hasOneLife := prof.Version == ori.Definitive
-	extra := 0
 	if hasOneLife {
-		extra = 1
+		fmt.Printf("共 %d 项功能（含一命保护共 %d 项）：\n", len(fs), len(fs)+1)
+	} else {
+		fmt.Printf("共 %d 项功能（原版无一命保护）：\n", len(fs))
 	}
-	fmt.Printf("共 %d 项功能（含一命保护共 %d 项）：\n", len(fs), len(fs)+extra)
 	fmt.Println("  界面顺序 = 从一般到特殊：小键盘 → Ctrl+小键盘")
 
 	type row struct {

@@ -168,8 +168,9 @@ func (r *Runtime) GameWorldAddr() uint32 {
 // TimerAddr 返回当前活体 GameTimer 对象地址（"重置时间"用）。
 //
 // 每次都从缓存的静态槽重读，而不是信任缓存的对象指针：换场景/读档时
-// 游戏会重建 GameTimer 并改写 GameTimer.Instance。对象地址可能低于
-// minObjAddr（实测 0x2Fxxxxxx），故类名校验用 minObjLowAddr。
+// 游戏会重建 GameTimer 并改写 GameTimer.Instance。终极版该对象实测在
+// 0x2F 段（低于终极版 minObjAddr=0x40000000），故类名校验用 minObjLowAddr；
+// 原版下界本身就是 0x00010000，低区对象直接命中。
 // 未定位返回 0。
 func (r *Runtime) TimerAddr() uint32 {
 	r.mu.Lock()
@@ -317,7 +318,9 @@ func isTextPtr(v uint32) bool {
 // 对象布局: [0]=vtable -> klass, klass+0x30 = 类型名字符串指针。
 //
 // 判据（逐条实测校准）:
-//  1. 对象本身在堆带（0x40000000-0x70000000）。
+//  1. 对象本身在该版本的对象下界之上（minObjAddr: 终极版 0x40000000、
+//     原版 0x00010000）且低于 maxUserAddr。上界必须是完整 32 位用户空间——
+//     早期写成 0x70000000，导致重生后分配到 0x73xxxxxx 的对象被漏掉（§8-2）。
 //  2. vtable 是合法指针。注意 vtable 可能位于两处: MonoBehaviour 派生类在
 //     堆带（如 SeinCharacter 的 0x529CC60C），纯托管类在元数据带
 //     （如 DifficultyController 的 0x2B4D7A30）—— 不能用地址带区分。
@@ -550,9 +553,10 @@ func (r *Runtime) refreshChain(p *core.Process, sein uint32) {
 		jump, _ = p.ReadU32(ab + OffAbilitiesJump)
 		dbl, _ = p.ReadU32(ab + OffAbilitiesDoubleJump)
 		dash, _ = p.ReadU32(ab + OffAbilitiesDash)
-		// 用 isObjPtrLow 而非 isHeapPtr：能力组件可能分配在 0x30xxxxxx 这类
-		// 低于 0x40000000 的带里（实测 SeinDashAttack 在 0x304103C0），
-		// 用 isHeapPtr 会把它当成无效指针而清 0，导致功能"看不到组件"。
+		// 用 isObjPtrLow 而非 isHeapPtr：终极版的能力组件可能分配在
+		// 0x30xxxxxx 这类低于终极版下界 0x40000000 的带里（实测
+		// SeinDashAttack 在 0x304103C0），用 isHeapPtr 会把它当成无效指针而清 0。
+		// 原版下界本身就是 0x00010000，两种判据等价。
 		if !isObjPtrLow(jump) {
 			jump = 0
 		}
@@ -617,7 +621,7 @@ func (r *Runtime) Refresh() bool {
 	r.LastScanError = ""
 	r.mu.Unlock()
 
-	// ② 重读附属单例的静态槽（对象同样可能被重建/迁移到高地址）
+	// ② 重读附属单例的静态槽（对象可能被重建，或随堆分配迁移到该版本的堆带内）
 	r.refreshAuxSlots(p)
 
 	r.refreshChain(p, sein)
@@ -1194,7 +1198,9 @@ func (r *Runtime) findDebugNav(p *core.Process, ui, knownOff uint32) (uint32, ui
 }
 
 // locateAreaMapUI 找 AreaMapUI.Instance 的静态槽与对象。
-// 先扫 mono 静态块带（0x06-0x08，通常几百 KB，快），找不到再退化到全低区。
+// 先扫 0x06-0x08（终极版的 mono 静态块带，几百 KB、很快；原版这个带是空的，
+// 直接跳过），找不到再退化到全低区 0x00010000-0x10000000——两版的静态槽
+// 都落在这里，所以原版也能定位（对象本身可以在更高地址）。
 func locateAreaMapUI(p *core.Process) (slot, obj uint32) {
 	cache := map[uint32]string{}
 	isAreaMapUI := func(v uint32) bool {

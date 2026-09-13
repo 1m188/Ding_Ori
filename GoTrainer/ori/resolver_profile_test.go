@@ -24,9 +24,9 @@ func TestApplyProfileByVersion(t *testing.T) {
 	if !vtableBand(vanillaVtable) {
 		t.Fatalf("原版 vtable 带错误: 0x%08X 应在扫描带内", vanillaVtable)
 	}
-	// 注: 原版扫描带（0x20000000-0x40000000）是个较宽的区间，会覆盖到终极版
-	// 的 0x2A 段（多扫一点无害）；关键是**反过来**不能让终极版漏掉原版的
-	// 0x35B7 段，见下方 Definitive 断言。
+	// 注: 原版扫描带是 {0x20000000-0x40000000, 0x50000000-0x54000000}，前者
+	// 较宽、会覆盖到终极版的 0x2A 段（多扫一点无害）；关键是**反过来**不能让
+	// 终极版漏掉原版的 0x35B7 段，见下方 Definitive 断言。
 
 	NewRuntime(Profiles[Definitive]).SetProcess(nil)
 	if isHeapPtr(vanillaSein) {

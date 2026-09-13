@@ -211,10 +211,11 @@ type Region struct {
 // RPM 对只读页同样有效；对象扫描应使用本函数，避免游戏状态切换导致的
 // 区域保护属性时变造成漏扫。
 //
-// WoW64 注意: 32 位目标进程的 mono 大堆位于 64 位地址空间的高位
-// （如 0x800265C0，RPM 可正常读写），但 32 位视角的 VQEx 看不到它。
-// 本程序是 64 位进程，VQEx 返回的是 64 位视图（BaseAddress 高位为
-// 0xFFFFFFFF_xxxxxxxx），枚举上限必须放宽到 64 位，Region 取低 32 位。
+// WoW64 注意: 目标带 /LARGEADDRESSAWARE 时，32 位用户空间可以越过
+// 0x80000000（两种游戏的堆带不同: 终极版 0x50-0x7B、原版 0x01 段，但都
+// 可能落在 3GB 区）。本程序是 64 位进程，VQEx 返回的是 64 位视图，
+// 同一段 32 位内存可能以 0xFFFFFFFF_8xxxxxxx 这类影子形式出现，
+// 因此枚举上限必须放宽到完整的 64 位范围，Region 一律掩码取低 32 位。
 func (p *Process) ReadableRegions() []Region {
 	var out []Region
 	var addr uint64

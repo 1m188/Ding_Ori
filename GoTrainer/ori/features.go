@@ -1,7 +1,9 @@
 // Package ori —— 功能实现: 冻结 / 归零 / 倍率 / 计数锁定 四种模式。
 //
-// 键位布局对齐风灵月影《奥日与黑暗森林:终极版》v1.0 Plus 13 修改器。
-// 所有字段偏移经 CE mono dissect 实测（DE v1.0, Assembly-CSharp.dll）。
+// 键位布局对齐风灵月影《奥日与迷失森林：终极版》v1.0 Plus 13 修改器。
+// 字段偏移见 offsets.go（唯一维护点），两版都在活体进程上核验过：
+// 终极版 v1.0 与原版 Unity 5.0；按版本取值的有 JumpHeightOffsets /
+// BaseAbilityOffsets，功能表由 BuildFeatures(prof) 按版本裁剪。
 package ori
 
 import (
@@ -16,7 +18,8 @@ import (
 //
 // 键位约定（只用小键盘，避免与笔记本键盘的 F 键/主键盘区冲突）。
 // 现只用**两档**：
-//   - NeedCtrl=false: 小键盘数字键 Digit（1..9, 0）—— 普通/基础功能
+//   - NeedCtrl=false: 小键盘数字键 Digit（1..N，N 随版本: 终极版 9 / 原版 8）
+//     —— 普通/基础功能（没有 Digit 0，小键盘 0 不绑定任何功能）
 //   - NeedCtrl=true : Ctrl + 小键盘数字键 Digit —— 特殊功能
 //
 // NeedShift 字段保留，但没有功能使用（曾用于 Ctrl+Shift 档，因 Windows
@@ -27,7 +30,7 @@ import (
 // 另支持"前台导航"：修改器窗口在前台时，用 ↑↓ 选择、回车/空格切换
 // （见 UI 层的 navCursor），供没有小键盘的键盘使用。
 type Feature struct {
-	Digit     int  // 1..9 或 0（小键盘数字键 0）
+	Digit     int  // 1..N（小键盘数字键；N 随版本，见 BuildFeatures）
 	NeedCtrl  bool // 是否需按住 Ctrl
 	NeedShift bool // 是否需按住 Shift（当前无功能使用）
 	Name      string
@@ -1052,8 +1055,9 @@ func (g *explore100) Tick(r *Runtime) {
 //
 // 注意: 游戏是在「能力被正规授予」时才创建对应组件
 // （PlayerAbilities.SetAbility → Prefabs.EnsureRightPrefabsAreThereForAbilities）。
-// 这里只写标志位，因此少数能力（滑翔/冲刺/猛击等非默认实例化的）其组件
+// 这里只写标志位，因此少数能力（滑翔/猛击等非默认实例化的）其组件
 // 可能要等存档重载或场景切换后才会实体化生效。
+// （原版的基础能力清单是 9 项，没有 Grenade/Dash。）
 type grantAllAbilities struct {
 	f        *Feature
 	ver      Version // 决定基础能力清单（原版无 Grenade/Dash）

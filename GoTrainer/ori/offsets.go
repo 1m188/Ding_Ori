@@ -1,9 +1,13 @@
 // Package ori —— 地址常量与运行时结构（原版 + 终极版通用）。
 //
 // 两版游戏同为 Unity Mono 32 位，类结构经 CE mono dissect 考古：
-// 字段偏移两版完全一致，仅类静态槽/堆区域位置不同（因此运行期
-// 全部依赖堆扫描定位，不依赖静态槽——CE 的静态槽地址位于
-// MonoDataCollector 注入层，外部读取为 MEM_FREE，不可用）。
+// **绝大多数类的字段偏移两版一致**（声明顺序相同的类，mono 重排结果也相同），
+// 仅两处不同、且都按版本取值（不要写死）：
+//   - SeinJump 的跳跃高度偏移 → JumpHeightOffsets(version)
+//   - PlayerAbilities 的基础能力清单（原版无 Grenade/Dash）→ BaseAbilityOffsets(version)
+//
+// 两版的类静态槽/堆区域位置不同，因此运行期全部依赖堆扫描定位，不依赖静态槽
+// （CE 的静态槽地址位于 MonoDataCollector 注入层，外部读取为 MEM_FREE，不可用）。
 //
 // 原版:  ori.exe   (appid 261570, buildid 814852, Unity 5.0.0)
 // 终极版: oriDE.exe (appid 387290, buildid 1096284, Unity 5.3.2)
@@ -23,8 +27,9 @@
 //   - SeinLevel 回指: u32(X+0x20)=P 且 u32(P+0x38)==X
 //   - 加固: Energy.Max∈[1,50] 且 Health.MaxHealth∈[12,400]
 //     （排除传送门克隆/UI 副本/教学对象）
-//   - DE 的 mono 大堆位于 64 位地址空间高位（0x80000000+，WoW64 影子区），
-//     区域枚举须使用 64 位视图（见 core.ReadableRegions）。
+//   - 地址空间按版本不同（见 ApplyProfile）: 终极版堆在 0x50-0x7B、原版堆在
+//     0x01 段。区域枚举必须用 64 位视图（WoW64 下 32 位地址可能以
+//     0xFFFFFFFF_8xxxxxxx 之类的影子形式返回，见 core.ReadableRegions）。
 //
 // 数值验证记录:
 //
