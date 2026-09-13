@@ -123,8 +123,10 @@ const (
 // UltraDefense / 各种 *Efficiency / Upgrade / MapMarkers 等）**一律不在内**，
 // 那些应由玩家自己用"无限能力点数"去技能树购买。
 //
-// 偏移经 mono 元数据核验（PlayerAbilities 首个字段 +0x14）。
-var BaseAbilityOffsets = []uint32{
+// 偏移经 mono 元数据核验（PlayerAbilities 首个字段 +0x14）。两个版本
+// PlayerAbilities 的前 37 个字段声明顺序完全一致，故基础能力偏移通用；
+// 终极版其后追加 Grenade / Dash 等 6 个字段，多出"光芒爆裂 / 冲刺"两项。
+var baseAbilityOffsetsShared = []uint32{
 	0x3C, // SpiritFlame    精灵之火
 	0x1C, // WallJump       飞檐走壁
 	0x18, // ChargeFlame    充能烈焰
@@ -134,8 +136,20 @@ var BaseAbilityOffsets = []uint32{
 	0x38, // Glide          黑子之羽
 	0x34, // Climb          攀爬
 	0x28, // ChargeJump     充能跳跃
-	0xA8, // Grenade        光芒爆裂
-	0xAC, // Dash           冲刺
+}
+
+// BaseAbilityOffsets 返回该版本"基础能力"的字段偏移列表。
+// 原版没有冲刺（也没有 Grenade 字段，冲刺/光芒爆裂均为终极版新增内容）。
+func BaseAbilityOffsets(v Version) []uint32 {
+	out := make([]uint32, len(baseAbilityOffsetsShared))
+	copy(out, baseAbilityOffsetsShared)
+	if v == Definitive {
+		out = append(out,
+			0xA8, // Grenade        光芒爆裂
+			0xAC, // Dash           冲刺
+		)
+	}
+	return out
 }
 
 // GameWorld 字段偏移（探索度所在；GameWorld.Instance 可定位）。
@@ -221,16 +235,18 @@ const (
 	OffSoulFlameTapRemaining      = 0xB8 // m_tapRemainingTime: >0 表示仍处于"轻点"窗口（松开即开技能树）
 )
 
-// SeinJump 字段偏移（跳跃强化）。
-const (
-	OffJumpBackflipHeight = 0x54 // BackflipJumpHeight (float)
-	OffJumpCrouchHeight   = 0x58 // CrouchJumpHeight (float)
-	OffJumpFirstHeight    = 0x60 // FirstJumpHeight (float) —— 普通跳跃高度
-	OffJumpIdleHeight     = 0x64 // JumpIdleHeight (float)
-	OffJumpImpulse        = 0x68 // JumpImpulse (float) —— 起跳冲量
-	OffJumpSecondHeight   = 0x70 // SecondJumpHeight (float)
-	OffJumpThirdHeight    = 0x74 // ThirdJumpHeight (float)
-)
+// JumpHeightOffsets 返回该版本 SeinJump 上"跳跃高度"字段的对象内偏移，
+// 顺序: 普通跳 / 二段跳 / 三段跳 / 下蹲跳 / 后空翻跳 / 待机跳。
+//
+// 版本差异（2026-09 原版实测）: 终极版的 SeinJump 比原版多出
+// SpinJumpSoundProvider / m_currentJumpingMaterial 两个字段，使后续字段整体
+// 后移，因此两版偏移不同（普通跳 0x60 vs 原版 0x5C）。用于"超级跳"。
+func JumpHeightOffsets(v Version) []uint32 {
+	if v == Vanilla {
+		return []uint32{0x5C, 0x68, 0x6C, 0x54, 0x50, 0x60}
+	}
+	return []uint32{0x60, 0x70, 0x74, 0x58, 0x54, 0x64}
+}
 
 // SeinAbilities 字段偏移（技能子对象容器）。
 //

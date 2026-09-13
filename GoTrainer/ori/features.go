@@ -660,6 +660,10 @@ done:
 	}
 }
 
+// oneLifeSupported 当前会话版本是否存在"一命保护"。仅终极版有难度/一命机制
+// （原版没有 DifficultyController / OneLife 类），由 BuildFeatures 按版本设置。
+var oneLifeSupported = true
+
 // TickAll 驱动所有激活中的功能。
 //
 // 先对执行器列表做快照再遍历: BuildFeatures 可能在另一协程重建该列表
@@ -671,7 +675,9 @@ func TickAll(r *Runtime) {
 	for _, t := range snapshot {
 		t.Tick(r)
 	}
-	oneLife.Tick(r)
+	if oneLifeSupported {
+		oneLife.Tick(r)
+	}
 }
 
 // DeactivateAll 关闭全部（含需要还原参数的功能）。
@@ -695,7 +701,9 @@ func ActivateAll(fs []*Feature) {
 		}
 		ActivateFeature(f)
 	}
-	oneLife.SetActive(true)
+	if oneLifeSupported {
+		oneLife.SetActive(true)
+	}
 }
 
 // AllActive 是否所有功能都已开启（含一命保护）。
@@ -704,6 +712,9 @@ func AllActive(fs []*Feature) bool {
 		if !f.Active() {
 			return false
 		}
+	}
+	if !oneLifeSupported {
+		return true
 	}
 	return oneLife.Active()
 }
@@ -1030,7 +1041,8 @@ func (g *explore100) Tick(r *Runtime) {
 
 // ---------- 解锁全部基础技能 ----------
 
-// grantAllAbilities 解锁"暂停界面显示的基础能力"（11 项，见 BaseAbilityOffsets）。
+// grantAllAbilities 解锁"暂停界面显示的基础能力"（见 BaseAbilityOffsets，
+// 终极版 11 项 / 原版 9 项）。
 //
 // 只给基础能力，**不给灵魂链接技能树里的被动**（那些让玩家用"无限能力点数"
 // 自己去买）。原因: 游戏把两者建模成同一类型 CharacterAbility，只能按字段区分。
@@ -1044,7 +1056,8 @@ func (g *explore100) Tick(r *Runtime) {
 // 可能要等存档重载或场景切换后才会实体化生效。
 type grantAllAbilities struct {
 	f        *Feature
-	sawWrite bool // 本次激活期间是否补授过
+	ver      Version // 决定基础能力清单（原版无 Grenade/Dash）
+	sawWrite bool    // 本次激活期间是否补授过
 }
 
 func (g *grantAllAbilities) Tick(r *Runtime) {
@@ -1062,7 +1075,7 @@ func (g *grantAllAbilities) Tick(r *Runtime) {
 		return
 	}
 	granted, total := 0, 0
-	for _, off := range BaseAbilityOffsets {
+	for _, off := range BaseAbilityOffsets(g.ver) {
 		obj, ok := r.Proc.ReadU32(pa + off)
 		if !ok || !isHeapPtr(obj) {
 			continue
@@ -1297,13 +1310,19 @@ func jumpField(r *Runtime, off uint32) (uint32, bool) {
 	return jump + off, true
 }
 
-// BuildFeatures 构建功能表（键位对齐风灵月影 DE v1.0 Plus 13）。
+// BuildFeatures 构建功能表（键位对齐风灵月影 DE v1.0 Plus 13），按版本裁剪:
+// 原版没有冲刺，也没有难度/一命机制（DifficultyController/OneLife 类不存在），
+// 故原版不含"无限冲刺""一命保护"，其余功能键位顺延（见函数末尾）。
 //
 // 全程持有 tickersMu 写锁: 重建 allTickers / featureActivators 期间，
 // 上一会话的功能引擎协程可能仍在 TickAll（见 tickersMu 注释）。
-func BuildFeatures() []*Feature {
+func BuildFeatures(prof Profile) []*Feature {
 	tickersMu.Lock()
 	defer tickersMu.Unlock()
+	oneLifeSupported = prof.Version == Definitive
+	if !oneLifeSupported {
+		oneLife.SetActive(false) // 原版：清掉可能遗留的激活态
+	}
 	allTickers = nil
 	featureActivators = map[*Feature]func(on bool){}
 
@@ -1380,13 +1399,14 @@ func BuildFeatures() []*Feature {
 		return soul + OffSoulFlameCooldownRemaining, true
 	}
 
-	jumpHeightFields := []func(*Runtime) (uint32, bool){
-		func(r *Runtime) (uint32, bool) { return jumpField(r, OffJumpFirstHeight) },
-		func(r *Runtime) (uint32, bool) { return jumpField(r, OffJumpSecondHeight) },
-		func(r *Runtime) (uint32, bool) { return jumpField(r, OffJumpThirdHeight) },
-		func(r *Runtime) (uint32, bool) { return jumpField(r, OffJumpCrouchHeight) },
-		func(r *Runtime) (uint32, bool) { return jumpField(r, OffJumpBackflipHeight) },
-		func(r *Runtime) (uint32, bool) { return jumpField(r, OffJumpIdleHeight) },
+	// 跳跃高度字段偏移随版本变化（SeinJump 布局不同），见 JumpHeightOffsets。
+	jumpOffs := JumpHeightOffsets(prof.Version)
+	jumpHeightFields := make([]func(*Runtime) (uint32, bool), 0, len(jumpOffs))
+	for _, off := range jumpOffs {
+		off := off
+		jumpHeightFields = append(jumpHeightFields, func(r *Runtime) (uint32, bool) {
+			return jumpField(r, off)
+		})
 	}
 
 	// ---- 构造器 ----
@@ -1434,7 +1454,7 @@ func BuildFeatures() []*Feature {
 	}
 	newGrantAll := func(digit int) *Feature {
 		f := NewCtrlFeature(digit, "解锁全部基础技能")
-		allTickers = append(allTickers, &grantAllAbilities{f: f})
+		allTickers = append(allTickers, &grantAllAbilities{f: f, ver: prof.Version})
 		return f
 	}
 	newExplore100 := func(digit int) *Feature {
@@ -1466,27 +1486,36 @@ func BuildFeatures() []*Feature {
 		return f
 	}
 	// 键位分配原则: 每个功能只有一个快捷键，两档从简到繁——
-	// 小键盘 1-9/0（普通功能）→ Ctrl+小键盘（特殊功能，一命保护排最后）。
-
-	return []*Feature{
-		// ===== 基础能力: 小键盘 1-9/0（顺序编号）=====
+	// 小键盘（普通功能）→ Ctrl+小键盘（特殊功能，一命保护排最后）。
+	// 编号按顺序自动分配: 原版缺"无限冲刺"，其后功能整体前移一位，
+	// 保证"没有的功能直接去掉、有的仍按顺序排"。
+	feats := []*Feature{
+		// ===== 基础能力: 小键盘（顺序编号）=====
 		newRefill(1, "无限生命", hp, hpMax, true, HealthPointsPerCell, " 球"),
 		newRefill(2, "无限能量", en, enMax, false, 1, ""),
 		newZeroFloat(3, "灵魂链接无需冷却", soulCd),
 		newSoulFlameAnywhere(4),
 		newSuperJump(5, 2.5),
 		newInfiniteDoubleJump(6),
-		newInfiniteDash(7),
-		newSkillPoints(8, 99),
-		newShowMap(9),
-		// ===== 特殊功能: Ctrl+小键盘（顺序接续）=====
+	}
+	digit := 7
+	if prof.Version == Definitive {
+		feats = append(feats, newInfiniteDash(digit))
+		digit++
+	}
+	feats = append(feats, newSkillPoints(digit, 99))
+	digit++
+	feats = append(feats, newShowMap(digit))
+	// ===== 特殊功能: Ctrl+小键盘（顺序接续）=====
+	feats = append(feats,
 		newCtrlCounterLock(1, "死亡数归零", deaths, 0),
 		newExplore100(2),
 		newGrantAll(3),
 		newResetTime(4),
 		newGrantKeys(5),
-		// ===== 特殊功能: Ctrl+小键盘 6（一命保护，见 oneLife）=====
-	}
+		// 一命保护（Ctrl+小键盘 6）仅终极版有：见 oneLife / navList。
+	)
+	return feats
 }
 
 // CtrlOneLifeDigit 一命保护的键位（Ctrl+小键盘 6，追加在 Ctrl 组末尾）。

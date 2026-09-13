@@ -368,13 +368,16 @@ func navList(s *session) []navEntry {
 			active: f.Active(), status: f.Status(),
 		})
 	}
-	ol := ori.OneLife()
-	out = append(out, navEntry{
-		label:  ori.OneLifeHotkeyLabel(),
-		name:   ol.Name(),
-		active: ol.Active(),
-		status: ol.Status(),
-	})
+	// 一命保护是终极版专属（原版无难度/一命机制，游戏里没有承载类）。
+	if s.prof.Version == ori.Definitive {
+		ol := ori.OneLife()
+		out = append(out, navEntry{
+			label:  ori.OneLifeHotkeyLabel(),
+			name:   ol.Name(),
+			active: ol.Active(),
+			status: ol.Status(),
+		})
+	}
 	return out
 }
 
@@ -418,7 +421,7 @@ func (a *app) choose(prof ori.Profile) {
 	teardownSession(a.current())
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	s := &session{prof: prof, r: &ori.Runtime{}, feats: ori.BuildFeatures()}
+	s := &session{prof: prof, r: &ori.Runtime{}, feats: ori.BuildFeatures(prof)}
 	ori.SetActiveRuntime(s.r) // 供经验倍率单选互斥还原数值
 	a.sess = s
 	a.chosen = true
@@ -697,7 +700,7 @@ func main() {
 		shiftDown := core.GetAsyncKeyDown(vkShift)
 
 		// 小键盘 1-9 是 0x61-0x69，小键盘 0 是 0x60（全局热键，与焦点无关）
-		// 一命保护（Ctrl+小键盘 6）不在 feats 列表里，单独处理。
+		// 一命保护（Ctrl+小键盘 6，仅终极版）不在 feats 列表里，单独处理。
 		handleDigit := func(digit int) {
 			hit := false
 			for _, f := range s.feats {
@@ -706,7 +709,8 @@ func main() {
 					hit = true
 				}
 			}
-			if !hit && ctrlDown && !shiftDown && digit == ori.CtrlOneLifeDigit {
+			if !hit && ctrlDown && !shiftDown && digit == ori.CtrlOneLifeDigit &&
+				s.prof.Version == ori.Definitive {
 				toggleOneLife()
 			}
 		}

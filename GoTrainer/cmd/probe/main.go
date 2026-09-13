@@ -193,6 +193,14 @@ func main() {
 		cmdTimer(p)
 	case "onelife":
 		cmdOneLife(p)
+	case "snap":
+		cmdSnap(p)
+	case "fieldoff":
+		if len(os.Args) < 4 {
+			fmt.Println("usage: probe fieldoff <ClassName> <FieldName>")
+			return
+		}
+		fmt.Print(ori.DebugDumpField(p, os.Args[2], os.Args[3]))
 	case "keys":
 		cmdKeys(p)
 	case "map":
@@ -2415,8 +2423,15 @@ func cmdBases(p *core.Process) {
 //
 //	probe feats
 func cmdFeats() {
-	fs := ori.BuildFeatures()
-	fmt.Printf("共 %d 项功能（含一命保护共 %d 项）：\n", len(fs), len(fs)+1)
+	prof := probeProfile()
+	fs := ori.BuildFeatures(prof)
+	// 一命保护仅终极版存在（原版无难度/一命机制）。
+	hasOneLife := prof.Version == ori.Definitive
+	extra := 0
+	if hasOneLife {
+		extra = 1
+	}
+	fmt.Printf("共 %d 项功能（含一命保护共 %d 项）：\n", len(fs), len(fs)+extra)
 	fmt.Println("  界面顺序 = 从一般到特殊：小键盘 → Ctrl+小键盘")
 
 	type row struct {
@@ -2437,8 +2452,10 @@ func cmdFeats() {
 	for _, f := range fs {
 		rows = append(rows, row{f.HotkeyLabel(), f.Name, tierOf(f.NeedCtrl, f.NeedShift)})
 	}
-	// 一命保护不在 feats 中，界面上追加在最后（属 Ctrl+小键盘 档）
-	rows = append(rows, row{ori.OneLifeHotkeyLabel(), ori.OneLife().Name(), 1})
+	// 一命保护不在 feats 中，界面上追加在最后（属 Ctrl+小键盘 档；仅终极版）
+	if hasOneLife {
+		rows = append(rows, row{ori.OneLifeHotkeyLabel(), ori.OneLife().Name(), 1})
+	}
 
 	tierName := []string{"小键盘", "Ctrl+小键盘", "Ctrl+Shift+小键盘"}
 	seen := map[string]bool{}
@@ -2638,7 +2655,7 @@ func cmdRaceTest(p *core.Process) {
 	}()
 
 	for i := 0; i < 30; i++ {
-		fs := ori.BuildFeatures()
+		fs := ori.BuildFeatures(probeProfile())
 		ori.SetActiveRuntime(rt)
 		if len(fs) > 0 {
 			ori.ActivateFeature(fs[0])
@@ -2955,6 +2972,26 @@ func cmdOneScan(p *core.Process) {
 //
 // 流程: 解析 -> 激活指定功能 -> 连续 Tick -> 打印状态与目标内存原值 ->
 // 关闭功能（还原）-> 打印还原后原值。全部写入可逆，安全。
+// cmdSnap 只读打印所有功能依赖字段的现值（偏移核验用）。
+func cmdSnap(p *core.Process) {
+	prof := probeProfile()
+	rt := &ori.Runtime{Prof: &prof}
+	rt.SetProcess(p)
+	if !rt.Refresh() {
+		fmt.Println("解析失败")
+		return
+	}
+	// 等后台单例定位（原版低区扫描较慢）。
+	for i := 0; i < 60; i++ {
+		if rt.DeathCounterAddr() != 0 && rt.TimerAddr() != 0 && rt.GameWorldAddr() != 0 {
+			break
+		}
+		time.Sleep(time.Second)
+		rt.Refresh()
+	}
+	fmt.Print(ori.DebugSnap(rt))
+}
+
 func cmdFeat(p *core.Process) {
 	if len(os.Args) < 3 {
 		fmt.Println("usage: probe feat <digit> [seconds] [-ctrl]")
@@ -2987,9 +3024,10 @@ func cmdFeat(p *core.Process) {
 	fmt.Printf("活体 SeinCharacter=0x%08X Level=0x%08X Jump=0x%08X DoubleJump=0x%08X SoulFlame=0x%08X Death=0x%08X\n",
 		rt.SeinCharacterAddr(), rt.SeinLevelAddr(), rt.SubAddr("jump"), rt.SubAddr("doublejump"),
 		rt.SubAddr("soulflame"), rt.DeathCounterAddr())
-	// 等待后台单例定位（死亡计数/难度控制）
+	// 等待后台单例定位（死亡计数/难度控制）。
+	// 原版低地址带约 160MB，一次辅助扫描需 15-25s，故等待放宽到 60s。
 	if rt.DeathCounterAddr() == 0 {
-		for i := 0; i < 10; i++ {
+		for i := 0; i < 60; i++ {
 			time.Sleep(time.Second)
 			rt.Refresh()
 			if rt.DeathCounterAddr() != 0 {
@@ -2999,7 +3037,7 @@ func cmdFeat(p *core.Process) {
 		fmt.Printf("等待后 Death=0x%08X Diff=0x%08X\n", rt.DeathCounterAddr(), rt.SubAddr("diff"))
 	}
 
-	feats := ori.BuildFeatures()
+	feats := ori.BuildFeatures(probeProfile())
 	var target *ori.Feature
 	for _, f := range feats {
 		if f.Digit == digit && f.NeedCtrl == useCtrl && f.NeedShift == useShift {
