@@ -151,7 +151,7 @@ SeinCharacter +0x38 -> SeinLevel      +0x3C -> SeinEnergy
 |---|---|---|
 | Ctrl+小键盘 1 | 死亡数归零 | ✓ 实测 |
 | Ctrl+小键盘 2 | 100% 探索 | ✓ 实测（区域完成度置 1） |
-| Ctrl+小键盘 3 | 获得所有技能 | ✓ 实测（36 项，逐项补齐） |
+| Ctrl+小键盘 3 | 解锁全部基础技能 | ✓ 实测（11 项，只给基础能力） |
 
 **特殊能力 —— Ctrl+Shift+小键盘 1..N**
 
@@ -181,20 +181,45 @@ SeinCharacter +0x38 -> SeinLevel      +0x3C -> SeinEnergy
 > 已按实测反馈移除：**满生命球**、**满能量球**（有无限生命/能量后无意义）、
 > **超级跳冲量**、**二段跳强化**、**无限经验**、**经验倍率 2x/4x/8x/16x**。
 
-### 新增功能说明（技能 / 探索）
+### 新增功能说明（基础技能 / 探索）
 
-- **获得所有技能**：遍历 `PlayerAbilities` 的全部能力字段（40 项，偏移经 mono
-  元数据核验），把未获得的 `HasAbility` 置 1。**默认跳过 4 项地图标记**——
-  `MapMarkers` / `HealthMarkers` / `EnergyMarkers` / `AbilityMarkers`：
-  这四项不是"技能"，而是**地图图标开关**（分别让地图显示地图碎片、生命球、
-  能量球、能力点的位置），打开等于把全图秘密位置直接揭示出来，会剧透探索过程。
-  需要连标记一起给可再改。
-  注意：游戏只在"正规授予"时才实例化能力组件，因此少数能力（滑翔/冲刺/猛击等
-  非默认实例化的）其组件可能要等**存档重载或场景切换**后才实体化生效。
+- **解锁全部基础技能**：只解锁**暂停界面显示的那 11 项基础能力**，清单见
+  `ori/offsets.go` 的 `BaseAbilityOffsets`（精灵之火 / 飞檐走壁 / 充能烈焰 /
+  二段跳 / 猛击 / 践踏攻击 / 黑子之羽 / 攀爬 / 充能跳跃 / 光芒爆裂 / 冲刺）。
+  已拥有的跳过（幂等）；关闭时不做任何事，再次开启仍会把缺的补上。
+
+  > **为什么不给技能树里的被动**：游戏把"基础能力"和"灵魂链接技能树里用能力点
+  > 买的被动"建模成**同一个类型**（`CharacterAbility`，只有一个 `HasAbility`
+  > 布尔），因此无法靠类型区分，只能按字段清单区分。技能树被动
+  > （`RapidFire` / `UltraDefense` / 各种 `*Efficiency` / `*Upgrade` /
+  > `MapMarkers` 等）**一律不在清单内**，由玩家用"无限能力点数"自己去技能树买。
+  > 实测验证：清空基础能力"冲刺"后功能会补回；清空技能树被动"UltraDefense"
+  > 后功能不会动它。
+
+  > 4 项地图标记（`MapMarkers`/`HealthMarkers`/`EnergyMarkers`/`AbilityMarkers`）
+  > 也属于技能树被动，**不会**被本功能解锁。
+  > 补充：这四项的效果是"让地图显示某类收集品图标"，但**它们不参与完成度计算**
+  > （`IconIsCompletionType` 只认可 Keystone / HealthUpgrade / EnergyUpgrade /
+  > AbilityPoint / Experience / MapstonePickup）。
+
+  注意：游戏只在"正规授予"时才实例化能力组件（`PlayerAbilities.SetAbility` →
+  `Prefabs.EnsureRightPrefabsAreThereForAbilities`）。这里只写标志位，因此少数
+  能力（滑翔/冲刺/猛击等非默认实例化的）其组件可能要等**存档重载或场景切换**
+  后才实体化生效。
 - **100% 探索**：`GameWorld.RuntimeAreas` 是 `List<RuntimeGameWorldArea>`，
   逐个把 `m_completionAmount` 置 1 并清掉 `m_dirtyCompletionAmount`
   （避免游戏重算覆盖）。`GameWorld.Instance` 可正常定位。
   实测能写入绝大多数区域；若某区域对象为空则跳过（界面百分比取各区域平均）。
+
+  > **注意这只能解锁"完成地图"成就，不是"找齐秘密"**：
+  > `CompleteMapAchievementAsset` 每 5 秒采样 `GameWorld.CompletionAmount ≈ 1`，
+  > 正是本功能驱动的值，所以能解锁它。
+  > 但"翻遍每一寸土地"（`FindAllSecretsAchievementAsset`）只在
+  > `AchievementsLogic.RevealTransparentWall()` 里发放——穿过的**半透明隐藏墙**
+  > 计数到 45 面才给，与地图百分比、与收集品图标都无关，**本功能给不了**，
+  > 仍需自己去探索。
+  > 另：所有成就的发放都被 `!CheatsHandler.DebugWasEnabled` 拦着，
+  > 一旦游戏内调试菜单被启用过，成就将不再解锁。
 
 ### 未实现：重置时间
 

@@ -113,51 +113,27 @@ const (
 	OffAbilityHasAbility                = 0x08 // CharacterAbility.HasAbility (bool, 1 字节)
 )
 
-// PlayerAbilityOffsets PlayerAbilities 中全部能力字段的偏移（mono 元数据核验，
-// 连续 0x14..0xB0，共 40 项；首个字段 +0x14 是因为基类占用了 0x00-0x13）。
+// BaseAbilityOffsets "暂停界面显示的基础能力"在 PlayerAbilities 中的字段偏移。
 //
-// 用途: "获得所有技能"逐个把各 CharacterAbility.HasAbility 置 1。
-// 列表末尾 4 项为地图标记（MapMarkers/HealthMarkers/EnergyMarkers/AbilityMarkers），
-// 属于"地图图标显示"而非技能，会直接揭示地图内容，故**默认跳过**，
-// 避免改动地图探索状态。
-var PlayerAbilityOffsets = []uint32{
-	0x14, // Bash
-	0x18, // ChargeFlame
-	0x1C, // WallJump
-	0x20, // Stomp
-	0x24, // DoubleJump
-	0x28, // ChargeJump
-	0x2C, // Magnet
-	0x30, // UltraMagnet
-	0x34, // Climb
-	0x38, // Glide
-	0x3C, // SpiritFlame
-	0x40, // RapidFire
-	0x44, // SoulEfficiency
-	0x48, // WaterBreath
-	0x4C, // ChargeFlameBlast
-	0x50, // ChargeFlameBurn
-	0x54, // DoubleJumpUpgrade
-	0x58, // BashBuff
-	0x5C, // UltraDefense
-	0x60, // HealthEfficiency
-	0x64, // Sense
-	0x68, // StompUpgrade
-	0x6C, // QuickFlame
-	// 0x70/0x78/0x7C/0x80 = 地图标记，见上说明，跳过
-	0x74, // EnergyEfficiency
-	0x84, // Rekindle
-	0x88, // Regroup
-	0x8C, // ChargeFlameEfficiency
-	0x90, // UltraSoulFlame
-	0x94, // SoulFlameEfficiency
-	0x98, // SplitFlameUpgrade
-	0x9C, // SparkFlame
-	0xA0, // CinderFlame
-	0xA4, // UltraSplitFlame
-	0xA8, // Grenade
-	0xAC, // Dash
-	0xB0, // GrenadeUpgrade
+// 重要区分: 游戏把"基础能力"和"灵魂链接技能树里用能力点买的被动"建模成
+// 同一个类型（CharacterAbility，只有一个 HasAbility 布尔），因此**无法靠类型
+// 区分**，只能按字段清单区分。本表只列基础能力，技能树被动（RapidFire /
+// UltraDefense / 各种 *Efficiency / Upgrade / MapMarkers 等）**一律不在内**，
+// 那些应由玩家自己用"无限能力点数"去技能树购买。
+//
+// 偏移经 mono 元数据核验（PlayerAbilities 首个字段 +0x14）。
+var BaseAbilityOffsets = []uint32{
+	0x3C, // SpiritFlame    精灵之火
+	0x1C, // WallJump       飞檐走壁
+	0x18, // ChargeFlame    充能烈焰
+	0x24, // DoubleJump     二段跳
+	0x14, // Bash           猛击
+	0x20, // Stomp          践踏攻击
+	0x38, // Glide          黑子之羽
+	0x34, // Climb          攀爬
+	0x28, // ChargeJump     充能跳跃
+	0xA8, // Grenade        光芒爆裂
+	0xAC, // Dash           冲刺
 }
 
 // GameWorld 字段偏移（探索度所在；GameWorld.Instance 可定位）。

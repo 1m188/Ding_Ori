@@ -760,11 +760,15 @@ func (g *explore100) Tick(r *Runtime) {
 	g.f.setStatus(fmt.Sprintf("已置 100%% 探索（%d/%d 区域）", done, size))
 }
 
-// ---------- 获得所有技能 ----------
+// ---------- 解锁全部基础技能 ----------
 
-// grantAllAbilities 把所有能力开关置 1（已获得的跳过，幂等）。
+// grantAllAbilities 解锁"暂停界面显示的基础能力"（11 项，见 BaseAbilityOffsets）。
 //
-// 关闭时不做任何事，再次开启仍会把缺的补上。
+// 只给基础能力，**不给灵魂链接技能树里的被动**（那些让玩家用"无限能力点数"
+// 自己去买）。原因: 游戏把两者建模成同一类型 CharacterAbility，只能按字段区分。
+//
+// 已获得的跳过（幂等）；关闭时不做任何事，再次开启仍会把缺的补上。
+// 写入的只是 1 字节的 HasAbility 标志位，不触碰其它字段。
 //
 // 注意: 游戏是在「能力被正规授予」时才创建对应组件
 // （PlayerAbilities.SetAbility → Prefabs.EnsureRightPrefabsAreThereForAbilities）。
@@ -790,7 +794,7 @@ func (g *grantAllAbilities) Tick(r *Runtime) {
 		return
 	}
 	granted, total := 0, 0
-	for _, off := range PlayerAbilityOffsets {
+	for _, off := range BaseAbilityOffsets {
 		obj, ok := r.Proc.ReadU32(pa + off)
 		if !ok || !isHeapPtr(obj) {
 			continue
@@ -810,11 +814,11 @@ func (g *grantAllAbilities) Tick(r *Runtime) {
 		g.f.setStatus("地址解析失败")
 	case granted > 0:
 		g.sawWrite = true
-		g.f.setStatus(fmt.Sprintf("已补授 %d 项技能（共 %d 项）", granted, total))
+		g.f.setStatus(fmt.Sprintf("已补授 %d 项基础能力（共 %d 项）", granted, total))
 	case g.sawWrite:
-		g.f.setStatus(fmt.Sprintf("本轮已补授完毕（共 %d 项）", total))
+		g.f.setStatus(fmt.Sprintf("本轮已补授完毕（共 %d 项基础能力）", total))
 	default:
-		g.f.setStatus(fmt.Sprintf("全部 %d 项技能均已获得", total))
+		g.f.setStatus(fmt.Sprintf("全部 %d 项基础能力均已拥有", total))
 	}
 }
 
@@ -1032,7 +1036,7 @@ func BuildFeatures() []*Feature {
 		return f
 	}
 	newGrantAll := func(digit int) *Feature {
-		f := NewCtrlFeature(digit, "获得所有技能")
+		f := NewCtrlFeature(digit, "解锁全部基础技能")
 		allTickers = append(allTickers, &grantAllAbilities{f: f})
 		return f
 	}
