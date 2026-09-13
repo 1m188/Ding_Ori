@@ -19,7 +19,7 @@
 
 ## 使用
 
-1. 以管理员权限启动 `GoTrainer.exe`，在版本选择界面用 ↑↓ 选择，回车进入。
+1. 以管理员权限启动 `oritrainer.exe`（`go build .` 的默认产物名），在版本选择界面用 ↑↓ 选择，回车进入。
 2. 启动对应游戏并进入存档。修改器自动附加，约 **0.2–1 秒**内定位活体玩家对象
    （横向对比：早期版本是全堆扫描 9–15 秒，且经常定位失败）。
 3. ESC 可随时返回版本选择（仅在修改器窗口有焦点时生效）。
@@ -904,7 +904,7 @@ probe feats     → 键位表 + "无重复 ✓"
 
 ```bash
 cd GoTrainer
-go build -o GoTrainer.exe .      # 修改器本体（Windows 控制台 TUI）
+go build .                       # 修改器本体（产物名取 go.mod 模块默认: oritrainer.exe）
 go build -o probe.exe ./cmd/probe  # 诊断工具
 go vet ./... && gofmt -l .        # 提交前检查
 ```
