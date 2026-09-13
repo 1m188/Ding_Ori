@@ -274,6 +274,24 @@ const (
 	OffPlayerAbilitiesAirDash = 0xB8 // PlayerAbilities.AirDash（CharacterAbility）——只读，技能树内容
 )
 
+// "显示地图"相关偏移。
+//
+// 游戏有个显示用调试位 AreaMapDebugNavigation.UndiscoveredMapVisible：
+// 为 true 时地图绘制把所有面按已发现画（地形+图标+无迷雾），
+// 即"看起来像插了所有地图石"。
+//
+//	AreaMapUI.Instance（静态单例） +0x50 → AreaMapDebugNavigation（自动属性
+//	<DebugNavigation>k__BackingField 的实测偏移；运行时另做类名校验+兜底扫描）
+//	AreaMapDebugNavigation +0x20 → UndiscoveredMapVisible (bool)
+//
+// ⚠ 该位**不写进存档**：只在本次游戏进程内有效，重启游戏后还原（功能界面的
+// 状态文本会说明）。它是纯显示位，不碰 CheatsHandler.DebugEnabled，
+// 因此不影响成就（成就闸门只看 CheatsHandler.DebugWasEnabled，见 §7-16）。
+const (
+	OffAreaMapUIDebugNav      = 0x50 // AreaMapUI → AreaMapDebugNavigation
+	OffAreaMapUndiscoveredMap = 0x20 // AreaMapDebugNavigation.UndiscoveredMapVisible (bool)
+)
+
 // SeinDoubleJump 字段偏移（多段跳）。
 const (
 	OffDoubleJumpStrength   = 0x38 // JumpStrength (float)

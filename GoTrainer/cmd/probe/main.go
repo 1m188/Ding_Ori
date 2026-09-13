@@ -195,6 +195,8 @@ func main() {
 		cmdOneLife(p)
 	case "keys":
 		cmdKeys(p)
+	case "map":
+		cmdMap(p)
 	default:
 		usage()
 	}
@@ -2014,6 +2016,29 @@ func cmdKeys(p *core.Process) {
 		ori.OffKeysGinsoTree, b[0], ori.OffKeysForlornRuins, b[1], ori.OffKeysMountHoru, b[2])
 }
 
+// cmdMap 只读打印"显示地图"链路与当前值。
+//
+//	probe map
+func cmdMap(p *core.Process) {
+	prof := probeProfile()
+	rt := &ori.Runtime{Prof: &prof}
+	rt.SetProcess(p)
+	var nav uint32
+	for i := 0; i < 24; i++ {
+		if nav = rt.AreaMapNavAddr(); nav != 0 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if nav == 0 {
+		fmt.Println("未定位到 AreaMapDebugNavigation（需先进入存档）")
+		return
+	}
+	v, _ := p.ReadU8(nav + ori.OffAreaMapUndiscoveredMap)
+	fmt.Printf("AreaMapDebugNavigation = 0x%08X\n", nav)
+	fmt.Printf("  UndiscoveredMapVisible(+0x%02X) = %d   (1=地图全开)\n", ori.OffAreaMapUndiscoveredMap, v)
+}
+
 func cmdSingleton(p *core.Process) {
 	if len(os.Args) < 3 {
 		fmt.Println("usage: probe singleton <ClassName> [minObjHex]")
@@ -2345,7 +2370,7 @@ func cmdBases(p *core.Process) {
 	mor := rd(sein + ori.OffSeinMortality)
 	names := []string{
 		"sein", "abilities", "level", "energy", "mortality", "health",
-		"soulflame", "jump", "doublejump", "dash", "playerab", "death", "gw", "diffc", "timer", "keys",
+		"soulflame", "jump", "doublejump", "dash", "playerab", "death", "gw", "diffc", "timer", "keys", "mapnav",
 	}
 	vals := []uint32{
 		sein,
@@ -2364,6 +2389,7 @@ func cmdBases(p *core.Process) {
 		rt.SubAddr("diff"),
 		rt.TimerAddr(),
 		rt.KeysAddr(),
+		rt.AreaMapNavAddr(),
 	}
 	if asXML {
 		fmt.Println("  <UserdefinedSymbols>")

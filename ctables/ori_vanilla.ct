@@ -41,7 +41,7 @@
         </CheatEntry>
         <CheatEntry>
           <ID>2002</ID>
-          <Description>"符号: sein=SeinCharacter  abilities=SeinAbilities  level=SeinLevel  energy=SeinEnergy  mortality=SeinMortality  health=SeinHealthController  soulflame=SeinSoulFlame  jump=SeinJump  doublejump=SeinDoubleJump  playerab=PlayerAbilities  death=SeinDeathCounter  gw=GameWorld  diffc=DifficultyController  timer=GameTimer  keys=Keys 静态数据块  dash=SeinDashAttack（用 probe bases -xml -vanilla 生成）"</Description>
+          <Description>"符号: sein=SeinCharacter  abilities=SeinAbilities  level=SeinLevel  energy=SeinEnergy  mortality=SeinMortality  health=SeinHealthController  soulflame=SeinSoulFlame  jump=SeinJump  doublejump=SeinDoubleJump  playerab=PlayerAbilities  death=SeinDeathCounter  gw=GameWorld  diffc=DifficultyController  timer=GameTimer  keys=Keys 静态数据块  dash=SeinDashAttack  mapnav=AreaMapDebugNavigation（用 probe bases -xml -vanilla 生成）"</Description>
           <LastState/>
           <Color>808080</Color>
           <GroupHeader>1</GroupHeader>
@@ -110,7 +110,7 @@
 
     <CheatEntry>
       <ID>2200</ID>
-      <Description>"【普通功能】小键盘 1-7（偏移同终极版，⚠ 待核验）"</Description>
+      <Description>"【普通功能】小键盘 1-9（偏移同终极版，⚠ 待核验）"</Description>
       <LastState/>
       <Color>808080</Color>
       <GroupHeader>1</GroupHeader>
@@ -170,6 +170,13 @@
           <LastState/>
           <VariableType>4 Bytes</VariableType>
           <Address>level+24</Address>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>2209</ID>
+          <Description>"9 显示地图 — AreaMapDebugNavigation.UndiscoveredMapVisible(mapnav+20, Byte 置 1)；仅本次游戏有效、重启还原；⚠ 偏移抄自终极版，原版未核验"</Description>
+          <LastState/>
+          <VariableType>Byte</VariableType>
+          <Address>mapnav+20</Address>
         </CheatEntry>
       </CheatEntries>
     </CheatEntry>
@@ -299,6 +306,10 @@
     </SymbolEntry>
     <SymbolEntry>
       <Name>keys</Name>
+      <Address>00000000</Address>
+    </SymbolEntry>
+    <SymbolEntry>
+      <Name>mapnav</Name>
       <Address>00000000</Address>
     </SymbolEntry>
   </UserdefinedSymbols>

@@ -1222,6 +1222,47 @@ func (g *infiniteDash) Tick(r *Runtime) {
 	}
 }
 
+// ---------- 显示地图 ----------
+
+// showMap 打开游戏的"未探索地图可见"显示位：
+// AreaMapDebugNavigation.UndiscoveredMapVisible。
+//
+// 该位为 true 时，地图绘制把所有面按"已发现"处理——地形、图标、迷雾一起解除，
+// 观感等同于"插入了所有地图石"（世界地图与区域地图都适用，含元素门内部）。
+//
+// 性质与代价（README §7-16）:
+//   - **纯显示**调试位，不写进存档 → 仅本次游戏进程内有效，重启游戏后还原
+//     （功能状态栏已明确说明）；
+//   - 不碰 CheatsHandler.DebugEnabled / DebugWasEnabled，因此**不影响成就**
+//     （成就唯一闸门是 CheatsHandler.DebugWasEnabled）；
+//   - 也不把图标标记为"已发现"，不影响完成度/找秘密成就。
+//
+// 开启期间持续写 1；关闭不还原（本局保持显示，直到游戏重启）。
+type showMap struct {
+	f *Feature
+}
+
+func (g *showMap) Tick(r *Runtime) {
+	if !g.f.Active() {
+		return
+	}
+	nav := r.AreaMapNavAddr()
+	if nav == 0 {
+		g.f.setStatus("正在定位地图模块…")
+		return
+	}
+	// 双保险: AreaMapNavAddr 内已校验，这里再确认一次对象类型后再写
+	if nm, _, ok := r.classOfMin(r.Proc, nav, minObjLowAddr); !ok || nm != "AreaMapDebugNavigation" {
+		g.f.setStatus("地图模块校验失败")
+		return
+	}
+	if !r.Proc.WriteU8(nav+OffAreaMapUndiscoveredMap, 1) {
+		g.f.setStatus("写入失败")
+		return
+	}
+	g.f.setStatus("显示地图已开启（仅本次游戏有效，重启游戏后还原）")
+}
+
 // ---------- 功能表 ----------
 
 // jumpField 读取 SeinJump 上某个跳跃高度字段的地址。
@@ -1355,6 +1396,12 @@ func BuildFeatures() []*Feature {
 		allTickers = append(allTickers, &infiniteDash{f: f})
 		return f
 	}
+	// 显示地图: 打开游戏的"未探索地图可见"显示位（见 showMap 说明）
+	newShowMap := func(digit int) *Feature {
+		f := NewFeature(digit, "显示地图")
+		allTickers = append(allTickers, &showMap{f: f})
+		return f
+	}
 	// 能力点数: 不足才补满（见 setIntMin 说明）。
 	// 无限能力点数（含"等级 0 → 1"修正，见 skillPointsRefill 说明）
 	newSkillPoints := func(digit int, target int32) *Feature {
@@ -1408,6 +1455,7 @@ func BuildFeatures() []*Feature {
 		newInfiniteDoubleJump(6),
 		newInfiniteDash(7),
 		newSkillPoints(8, 99),
+		newShowMap(9),
 		// ===== 特殊功能: Ctrl+小键盘（顺序接续）=====
 		newCtrlCounterLock(1, "死亡数归零", deaths, 0),
 		newExplore100(2),

@@ -67,6 +67,10 @@ type Runtime struct {
 	// --- 纯静态类字段（无实例，字段存在 mono 类静态数据块里）---
 	keysStatic uint32 // Keys 类静态数据块基址（三把钥匙的 bool 在 +0/+1/+2）
 
+	// --- "显示地图"用的地图 UI 单例 ---
+	areaMapSlot   uint32 // AreaMapUI.Instance 的静态槽
+	areaMapDbgOff uint32 // AreaMapUI 内 DebugNavigation 字段偏移（实测 0x50，运行时候选校验）
+
 	// 定位诊断
 	LastScanError string // 失败原因（UI 显示）
 	LastSeinFind  time.Time
@@ -104,6 +108,8 @@ func (r *Runtime) SetProcess(p *core.Process) {
 	r.worldSlot = 0
 	r.timerSlot = 0
 	r.keysStatic = 0
+	r.areaMapSlot = 0
+	r.areaMapDbgOff = 0
 	r.LastScanError = ""
 	r.auxBusy = false
 	r.auxTried = time.Time{}
@@ -1053,6 +1059,137 @@ func findStaticData(p *core.Process, klass uint32, n int) uint32 {
 		}
 	}
 	return 0
+}
+
+// ---------- 地图 UI 单例（"显示地图"用）----------
+
+// AreaMapNavAddr 返回 AreaMapDebugNavigation 对象地址（其 +0x20 是
+// UndiscoveredMapVisible）。未定位返回 0。槽与字段偏移按会话缓存，失效重定位。
+func (r *Runtime) AreaMapNavAddr() uint32 {
+	r.mu.Lock()
+	slot, off, p := r.areaMapSlot, r.areaMapDbgOff, r.Proc
+	r.mu.Unlock()
+	if p == nil {
+		return 0
+	}
+	// 以缓存槽为准重读（UI 对象可能被重建）
+	if slot != 0 {
+		if ui, ok := p.ReadU32(slot); ok && isObjPtrLow(ui) {
+			if nm, _, ok2 := r.classOfMin(p, ui, minObjLowAddr); ok2 && nm == "AreaMapUI" {
+				if nav, off2 := r.findDebugNav(p, ui, off); nav != 0 {
+					if off2 != off {
+						r.mu.Lock()
+						r.areaMapDbgOff = off2
+						r.mu.Unlock()
+					}
+					return nav
+				}
+			}
+		}
+	}
+	// 首次 / 失效: 重新定位
+	slot2, ui := locateAreaMapUI(p)
+	if slot2 == 0 || ui == 0 {
+		return 0
+	}
+	nav, off3 := r.findDebugNav(p, ui, 0)
+	if nav == 0 {
+		return 0
+	}
+	r.mu.Lock()
+	r.areaMapSlot, r.areaMapDbgOff = slot2, off3
+	r.mu.Unlock()
+	return nav
+}
+
+// findDebugNav 在 AreaMapUI 对象里找 AreaMapDebugNavigation 对象。
+// 优先用已知偏移，不对则在 0x00..0x100 内按类名兜底扫描；返回 (对象, 字段偏移)。
+func (r *Runtime) findDebugNav(p *core.Process, ui, knownOff uint32) (uint32, uint32) {
+	chk := func(off uint32) (uint32, bool) {
+		n, ok := p.ReadU32(ui + off)
+		if !ok || !isObjPtrLow(n) {
+			return 0, false
+		}
+		if nm, _, ok2 := r.classOfMin(p, n, minObjLowAddr); ok2 && nm == "AreaMapDebugNavigation" {
+			return n, true
+		}
+		return 0, false
+	}
+	if knownOff != 0 {
+		if n, ok := chk(knownOff); ok {
+			return n, knownOff
+		}
+	}
+	for off := uint32(0); off < 0x100; off += 4 {
+		if n, ok := chk(off); ok {
+			return n, off
+		}
+	}
+	return 0, 0
+}
+
+// locateAreaMapUI 找 AreaMapUI.Instance 的静态槽与对象。
+// 先扫 mono 静态块带（0x06-0x08，通常几百 KB，快），找不到再退化到全低区。
+func locateAreaMapUI(p *core.Process) (slot, obj uint32) {
+	cache := map[uint32]string{}
+	isAreaMapUI := func(v uint32) bool {
+		if !isObjPtrLow(v) {
+			return false
+		}
+		vt, ok := p.ReadU32(v)
+		if !ok || !isPtr(vt) {
+			return false
+		}
+		nm, ok := cache[vt]
+		if !ok {
+			nm = ""
+			if k, ok2 := p.ReadU32(vt); ok2 && isPtr(k) && k != vt {
+				if k0, ok3 := p.ReadU32(k); ok3 && k0 == k { // klass 自指
+					if np, ok4 := p.ReadU32(k + 0x30); ok4 && isTextPtr(np) {
+						nm = readIdent(p, np)
+					}
+				}
+			}
+			cache[vt] = nm
+		}
+		return nm == "AreaMapUI"
+	}
+	scan := func(lo, hi uint32) (uint32, uint32, bool) {
+		const chunk = 4 << 20
+		buf := make([]byte, chunk)
+		for _, reg := range p.ReadableRegions() {
+			if reg.Base+reg.Size <= lo || reg.Base >= hi {
+				continue
+			}
+			for off := uint32(0); off < reg.Size; off += chunk {
+				n := reg.Size - off
+				if n > chunk {
+					n = chunk
+				}
+				if n < 4 {
+					break
+				}
+				b := buf[:n]
+				if !p.ReadBytes(reg.Base+off, b) {
+					continue
+				}
+				for i := 0; i+4 <= len(b); i += 4 {
+					v := u32at(b, i)
+					if isAreaMapUI(v) {
+						return reg.Base + off + uint32(i), v, true
+					}
+				}
+			}
+		}
+		return 0, 0, false
+	}
+	if s, o, ok := scan(0x06000000, 0x08000000); ok {
+		return s, o
+	}
+	if s, o, ok := scan(0x00010000, 0x10000000); ok {
+		return s, o
+	}
+	return 0, 0
 }
 
 // ---------- 快照（TUI 渲染用）----------

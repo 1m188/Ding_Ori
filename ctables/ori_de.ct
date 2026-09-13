@@ -30,7 +30,7 @@
       <CheatEntries>
         <CheatEntry>
           <ID>1001</ID>
-          <Description>"符号含义: sein=SeinCharacter  abilities=SeinAbilities  level=SeinLevel  energy=SeinEnergy  mortality=SeinMortality  health=SeinHealthController  soulflame=SeinSoulFlame  jump=SeinJump  doublejump=SeinDoubleJump  playerab=PlayerAbilities  death=SeinDeathCounter  gw=GameWorld  diffc=DifficultyController  timer=GameTimer  keys=Keys 静态数据块（三把钥匙）  dash=SeinDashAttack（冲刺组件）"</Description>
+          <Description>"符号含义: sein=SeinCharacter  abilities=SeinAbilities  level=SeinLevel  energy=SeinEnergy  mortality=SeinMortality  health=SeinHealthController  soulflame=SeinSoulFlame  jump=SeinJump  doublejump=SeinDoubleJump  playerab=PlayerAbilities  death=SeinDeathCounter  gw=GameWorld  diffc=DifficultyController  timer=GameTimer  keys=Keys 静态数据块（三把钥匙）  dash=SeinDashAttack（冲刺组件）  mapnav=AreaMapDebugNavigation（显示地图）"</Description>
           <LastState/>
           <Color>808080</Color>
           <GroupHeader>1</GroupHeader>
@@ -47,7 +47,7 @@
 
     <CheatEntry>
       <ID>1100</ID>
-      <Description>"【普通功能】小键盘 1-7"</Description>
+      <Description>"【普通功能】小键盘 1-9"</Description>
       <LastState/>
       <Color>0080FF</Color>
       <GroupHeader>1</GroupHeader>
@@ -347,6 +347,29 @@
               <VariableType>4 Bytes</VariableType>
               <Address>level+20</Address>
             </CheatEntry>
+        <CheatEntry>
+          <ID>1180</ID>
+          <Description>"9 显示地图 — 打开显示位 AreaMapDebugNavigation.UndiscoveredMapVisible（地形/图标/迷雾一起解除，等同插了所有地图石）；⚠ 仅本次游戏有效、重启还原；不影响成就"</Description>
+          <LastState/>
+          <Color>0080FF</Color>
+          <GroupHeader>1</GroupHeader>
+          <CheatEntries>
+            <CheatEntry>
+              <ID>1181</ID>
+              <Description>"AreaMapDebugNavigation.UndiscoveredMapVisible（mapnav+20, Byte 置 1）"</Description>
+              <LastState/>
+              <VariableType>Byte</VariableType>
+              <Address>mapnav+20</Address>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>1182</ID>
+              <Description>"符号 mapnav = AreaMapDebugNavigation 对象地址（AreaMapUI.Instance+0x50）；每次启动变，用 probe bases -xml 更新"</Description>
+              <LastState/>
+              <Color>808080</Color>
+              <GroupHeader>1</GroupHeader>
+            </CheatEntry>
+          </CheatEntries>
+        </CheatEntry>
           </CheatEntries>
         </CheatEntry>
 
@@ -748,6 +771,10 @@
     </SymbolEntry>
     <SymbolEntry>
       <Name>keys</Name>
+      <Address>00000000</Address>
+    </SymbolEntry>
+    <SymbolEntry>
+      <Name>mapnav</Name>
       <Address>00000000</Address>
     </SymbolEntry>
   </UserdefinedSymbols>
