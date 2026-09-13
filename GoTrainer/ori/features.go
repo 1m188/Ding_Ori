@@ -777,6 +777,63 @@ func (g *skillPointsRefill) Tick(r *Runtime) {
 	}
 }
 
+// ---------- 重置游戏时间 ----------
+
+// FormatGameTime 把秒格式化为 H:MM:SS（与游戏内 GameTimer 的调试串一致）。
+func FormatGameTime(sec float32) string {
+	if sec < 0 {
+		sec = 0
+	}
+	t := int(sec)
+	return fmt.Sprintf("%d:%02d:%02d", t/3600, (t/60)%60, t%60)
+}
+
+// resetTime 把 GameTimer.CurrentTime 持续写 0（游玩时间归零）。
+//
+// 语义:
+//   - 开启期间每周期写 0 → 游戏时间恒为 0:00:00（等效"冻结在 0"）。
+//   - 关闭后计时从 0 继续累计（CurrentTime += deltaTime 仍在跑）。
+//
+// 暂停界面的"花费时间"由 TimeCounterDisplay.Update() 每 1 秒读一次
+// GameController.Instance.Timer.DisplayTimeAsString（由 CurrentTime 派生），
+// 所以归零后最多 1 秒界面就同步显示 0。
+//
+// 对象通过 GameTimer.Instance 静态槽解析（TimerAddr），换场景/读档后会自动
+// 重读新对象；对象地址可能低于常规托管堆下限，解析侧已特殊处理。
+type resetTime struct {
+	f    *Feature
+	orig float32 // 首次归零前的原值（状态提示用）
+	got  bool
+}
+
+func (g *resetTime) Tick(r *Runtime) {
+	if !g.f.Active() {
+		return
+	}
+	obj := r.TimerAddr()
+	if obj == 0 {
+		g.f.setStatus("计时器定位中…")
+		return
+	}
+	cur, ok := r.Proc.ReadF32(obj + OffTimerCurrentTime)
+	if !ok {
+		g.f.setStatus("读取计时失败")
+		return
+	}
+	if !g.got && cur > 1 {
+		g.orig, g.got = cur, true
+	}
+	if !r.Proc.WriteF32(obj+OffTimerCurrentTime, 0) {
+		g.f.setStatus("写入计时失败")
+		return
+	}
+	if g.got {
+		g.f.setStatus(fmt.Sprintf("已归零（原 %s）", FormatGameTime(g.orig)))
+	} else {
+		g.f.setStatus("已归零 = 0:00:00")
+	}
+}
+
 // ---------- 100% 探索 ----------
 
 // explore100 把所有已加载区域的完成度置为 1（即 100%）。
@@ -1122,6 +1179,11 @@ func BuildFeatures() []*Feature {
 		allTickers = append(allTickers, &freezeInt{f: f, get: get, fixed: &t})
 		return f
 	}
+	newResetTime := func(digit int) *Feature {
+		f := NewCtrlFeature(digit, "重置时间")
+		allTickers = append(allTickers, &resetTime{f: f})
+		return f
+	}
 	// 键位分配原则: 每个功能只有一个快捷键，两档从简到繁——
 	// 小键盘 1-9/0（普通功能）→ Ctrl+小键盘（特殊功能，一命保护排最后）。
 
@@ -1138,6 +1200,7 @@ func BuildFeatures() []*Feature {
 		newCtrlCounterLock(1, "死亡数归零", deaths, 0),
 		newExplore100(2),
 		newGrantAll(3),
+		newResetTime(4),
 		// ===== 特殊功能: Ctrl+小键盘 5（一命保护，见 oneLife）=====
 	}
 }
