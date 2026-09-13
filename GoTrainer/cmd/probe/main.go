@@ -161,6 +161,8 @@ func main() {
 		cmdDiffName(p)
 	case "heapfind":
 		cmdHeapFind(p)
+	case "feats":
+		cmdFeats()
 	case "strref":
 		cmdStrRef(p)
 	case "fields2":
@@ -2108,6 +2110,39 @@ func parseHex(s string) uint64 {
 	s = strings.TrimPrefix(strings.TrimPrefix(s, "0x"), "0X")
 	n, _ := strconv.ParseUint(s, 16, 64)
 	return n
+}
+
+// cmdFeats 打印修改器的功能与键位表，并检测键位重复。
+//
+//	probe feats
+func cmdFeats() {
+	fs := ori.BuildFeatures()
+	fmt.Printf("共 %d 项功能（含一命保护共 %d 项）:\n", len(fs), len(fs)+1)
+	seen := map[string]bool{}
+	dup := 0
+	for _, f := range fs {
+		label := f.HotkeyLabel()
+		mark := ""
+		if seen[label] {
+			mark = "   <== 键位重复!"
+			dup++
+		}
+		seen[label] = true
+		fmt.Printf("  %-16s %s%s\n", label, f.Name, mark)
+	}
+	olLabel := fmt.Sprintf("Ctrl+小键盘 %d", ori.CtrlOneLifeDigit)
+	mark := ""
+	if seen[olLabel] {
+		mark = "   <== 键位重复!"
+		dup++
+	}
+	seen[olLabel] = true
+	fmt.Printf("  %-16s %s%s\n", olLabel, ori.OneLife().Name(), mark)
+	if dup == 0 {
+		fmt.Println("键位检查: 无重复 ✓")
+	} else {
+		fmt.Printf("键位检查: 发现 %d 处重复 ✗\n", dup)
+	}
 }
 
 // cmdHeapFind 在堆区按类名枚举实例（不限 DifficultyController）。

@@ -1081,9 +1081,9 @@ func BuildFeatures() []*Feature {
 		allTickers = append(allTickers, &infiniteDoubleJump{f: f})
 		return f
 	}
-	// 能力点数: 不足才补满（见 setIntMin 说明）
+	// 能力点数: 不足才补满（见 setIntMin 说明）。Ctrl 位功能。
 	newIntMin := func(digit int, name string, get func(*Runtime) (uint32, bool), target int32) *Feature {
-		f := NewFeature(digit, name)
+		f := NewCtrlFeature(digit, name)
 		allTickers = append(allTickers, &setIntMin{f: f, get: get, target: target})
 		return f
 	}
@@ -1124,24 +1124,22 @@ func BuildFeatures() []*Feature {
 	// 溢出部分再用 Ctrl+小键盘。一命保护占用 Ctrl+小键盘 1（见 oneLife 单例）。
 
 	return []*Feature{
-		// ===== 小键盘 1-9/0（顺序编号，无空位）=====
+		// ===== 小键盘 1-9/0（严格顺序编号，无空位、无重复）=====
 		newRefill(1, "无限生命", hp, hpMax, true, HealthPointsPerCell, " 球"),
 		newRefill(2, "无限能量", en, enMax, false, 1, ""),
 		newRefillTo(3, "满生命球", hpMax, hp, true, MaxHealthCells*HealthPointsPerCell, HealthPointsPerCell),
 		newRefillTo(4, "满能量球", enMax, en, false, MaxEnergyCells, 1),
 		newGrantAll(5),
 		newExplore100(6),
-		// 小键盘 7 空位（原"重置时间"：载体 GameTimer 挂在不可定位的
-		// GameController 上，暂无法实现，详见 README）
-		newZeroFloat(8, "灵魂链接无需冷却", soulCd),
-		newSoulFlameAnywhere(9),
-		newSuperJump(0, 2.5),
-		// ===== Ctrl+小键盘（顺序接续）=====
-		newInfiniteDoubleJump(1),
-		newIntMin(2, "无限能力点数", lvlSP, 999),
-		newCtrlCounterLock(4, "死亡数归零", deaths, 0),
+		newZeroFloat(7, "灵魂链接无需冷却", soulCd),
+		newSoulFlameAnywhere(8),
+		newSuperJump(9, 2.5),
+		newInfiniteDoubleJump(0),
+		// ===== Ctrl+小键盘（顺序接续；Ctrl+2 为一命保护，见 oneLife）=====
+		newIntMin(1, "无限能力点数", lvlSP, 999),
+		newCtrlCounterLock(3, "死亡数归零", deaths, 0),
 	}
 }
 
-// CtrlOneLifeDigit 一命保护的键位（Ctrl+小键盘 3）。
-const CtrlOneLifeDigit = 3
+// CtrlOneLifeDigit 一命保护的键位（Ctrl+小键盘 2）。
+const CtrlOneLifeDigit = 2

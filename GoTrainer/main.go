@@ -534,7 +534,7 @@ func renderTrainer(a *app, s *session) {
 
 	b.WriteString(cBox + "  ────────────────────────────────────────────────────────\n" + cReset)
 	b.WriteString("  " + cDim + "本窗口: ↑↓ 选择 · 回车/空格 开关   |   " + cReset +
-		cWhite + "小键盘 1-9/0" + cReset + " · " + cWhite + "Ctrl+小键盘 1-4" + cReset + "（全局，免切窗）   " +
+		cWhite + "小键盘 1-9/0" + cReset + " · " + cWhite + "Ctrl+小键盘 1-3" + cReset + "（全局，免切窗）   " +
 		cWhite + "HOME" + cReset + " 全关   " + cWhite + "F12" + cReset + " 重扫   " +
 		cWhite + "F1" + cReset + " 帮助   " + cWhite + "ESC" + cReset + " 返回   " + cWhite + "END" + cReset + " 退出\n")
 	b.WriteString("  " + cDim + a.getMsg() + cReset + "\n")
