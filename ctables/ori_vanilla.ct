@@ -41,7 +41,7 @@
         </CheatEntry>
         <CheatEntry>
           <ID>2002</ID>
-          <Description>"符号: sein=SeinCharacter  abilities=SeinAbilities  level=SeinLevel  energy=SeinEnergy  mortality=SeinMortality  health=SeinHealthController  soulflame=SeinSoulFlame  jump=SeinJump  doublejump=SeinDoubleJump  playerab=PlayerAbilities  death=SeinDeathCounter  gw=GameWorld  diffc=DifficultyController  timer=GameTimer（用 probe bases -xml -vanilla 生成）"</Description>
+          <Description>"符号: sein=SeinCharacter  abilities=SeinAbilities  level=SeinLevel  energy=SeinEnergy  mortality=SeinMortality  health=SeinHealthController  soulflame=SeinSoulFlame  jump=SeinJump  doublejump=SeinDoubleJump  playerab=PlayerAbilities  death=SeinDeathCounter  gw=GameWorld  diffc=DifficultyController  timer=GameTimer  keys=Keys 静态数据块（用 probe bases -xml -vanilla 生成）"</Description>
           <LastState/>
           <Color>808080</Color>
           <GroupHeader>1</GroupHeader>
@@ -169,7 +169,7 @@
 
     <CheatEntry>
       <ID>2300</ID>
-      <Description>"【特殊功能】Ctrl+小键盘 1-4（偏移同终极版，⚠ 待核验）"</Description>
+      <Description>"【特殊功能】Ctrl+小键盘 1-5（偏移同终极版，⚠ 待核验）"</Description>
       <LastState/>
       <Color>808080</Color>
       <GroupHeader>1</GroupHeader>
@@ -202,19 +202,26 @@
           <VariableType>Float</VariableType>
           <Address>timer+1C</Address>
         </CheatEntry>
+        <CheatEntry>
+          <ID>2305</ID>
+          <Description>"Ctrl+5 获得三把钥匙 — Keys.GinsoTree/ForlornRuins/MountHoru = keys+0/+1/+2（Byte 置 1）；⚠ 原版未核验（核验: probe keys -vanilla）"</Description>
+          <LastState/>
+          <VariableType>Byte</VariableType>
+          <Address>keys+0</Address>
+        </CheatEntry>
       </CheatEntries>
     </CheatEntry>
 
     <CheatEntry>
       <ID>2400</ID>
-      <Description>"【特殊功能】Ctrl+小键盘 5"</Description>
+      <Description>"【特殊功能】Ctrl+小键盘 6"</Description>
       <LastState/>
       <Color>C00000</Color>
       <GroupHeader>1</GroupHeader>
       <CheatEntries>
         <CheatEntry>
           <ID>2401</ID>
-          <Description>"Ctrl+5 一命保护 — DifficultyController.Difficulty(diffc+18) 锁为 Easy(0)（死亡不清档 + 伤害减半）；⛔ LowestDifficulty(diffc+1C) 只读禁写。⚠ 偏移抄自终极版，原版未核验（核验: probe onelife -vanilla）"</Description>
+          <Description>"Ctrl+6 一命保护 — DifficultyController.Difficulty(diffc+18) 锁为 Easy(0)（死亡不清档 + 伤害减半）；⛔ LowestDifficulty(diffc+1C) 只读禁写。⚠ 偏移抄自终极版，原版未核验（核验: probe onelife -vanilla）"</Description>
           <LastState/>
           <Color>C00000</Color>
           <VariableType>4 Bytes</VariableType>
@@ -281,6 +288,10 @@
     </SymbolEntry>
     <SymbolEntry>
       <Name>timer</Name>
+      <Address>00000000</Address>
+    </SymbolEntry>
+    <SymbolEntry>
+      <Name>keys</Name>
       <Address>00000000</Address>
     </SymbolEntry>
   </UserdefinedSymbols>

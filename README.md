@@ -44,7 +44,7 @@
 | 小键盘 6 | 无限二段跳 | ✓ 实测（同时开启二段跳能力） |
 | 小键盘 7 | 无限能力点数 | ✓ 实测（不足才补满，目标 99） |
 
-**特殊功能 —— Ctrl+小键盘 1..5**
+**特殊功能 —— Ctrl+小键盘 1..6**
 
 | 热键 | 功能 | 状态 |
 |---|---|---|
@@ -52,7 +52,8 @@
 | Ctrl+小键盘 2 | 100% 探索 | ✓ 实测（区域完成度置 1） |
 | Ctrl+小键盘 3 | 解锁全部基础技能 | ✓ 实测（11 项，只给基础能力） |
 | Ctrl+小键盘 4 | 重置时间 | ✓ 字段/写入已实测（`GameTimer.CurrentTime=0`）；暂停界面同步经源码确认 |
-| Ctrl+小键盘 5 | 一命保护（死亡不清档） | ✓ 实测（锁 `Difficulty=Easy`，死亡正常复活；`LowestDifficulty` 只读保留） |
+| Ctrl+小键盘 5 | 获得三把钥匙 | ✓ 实测（`Keys` 三个静态标记置 1；等价于捡起钥匙，不跳过副本） |
+| Ctrl+小键盘 6 | 一命保护（死亡不清档） | ✓ 实测（锁 `Difficulty=Easy`，死亡正常复活；`LowestDifficulty` 只读保留） |
 
 **界面按键（仅修改器窗口有焦点时生效）**
 
@@ -81,6 +82,11 @@
   这个字段，变成 Easy 后"清档链"整条不成立，死亡退化为普通复活；顺带享受 Easy
   的伤害减半/敌人血量降低。**`LowestDifficulty`（成就判定字段）只读保留**。
   关闭功能不还原难度（保护是粘性的，避免误关就恢复一命）。详见 §7-7。
+- **获得三把钥匙 = 把三个静态 bool 置 1**：`Keys.GinsoTree` / `ForlornRuins` /
+  `MountHoru`（在 mono 类静态数据块里，非对象链）。等价于走过去捡起钥匙，
+  **不跳过副本内容**，风险低；关闭不撤销，且会随存档持久化。详见 §7-14。
+  ⚠ 与之相邻的"三个元素恢复"标记（`Events.WaterPurified/WindRestored/WarmthReturned`）
+  会驱动 `WorldProgression`，**不提供该功能**（跳过副本易卡关），原因见 §7-14。
 
 ---
 
@@ -393,6 +399,7 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 | 100% 探索 | 遍历 `gw+18` 列表，元素从 `[_items]+0x10` 起，每个区域 `+14 = 1.0`、`+18 = 0` | 元素基址易错（§8-20）；只能解锁"完成地图"成就，不是"找齐秘密"（§7-6） |
 | 解锁全部基础技能 | 上表 11 个 `[playerab+偏移]+8 = 1` | 只写 1 字节；组件实例化见 §7-4 |
 | 重置时间 | `timer+1C = 0.0` | 每周期写 = 冻结在 0；对象每周期从静态槽重读（`TimerAddr()`，换场景会重建） |
+| 获得三把钥匙 | `Keys` 静态块 `+0/+1/+2 = 1` | 纯静态类字段（非对象链），由 `KeysAddr()` 定位并缓存；三个元素标记刻意不做（§7-14） |
 | 一命保护 | `diffc+18 = 0`（Easy），仅当 `diffc+1C（LowestDifficulty）== OneLife` 时 | 死亡判定读 `Difficulty`，改它即可断掉清档链；**永不写 `+0x1C`**（成就判定字段）。见 §7-7 |
 
 所有执行器一律通过 `Runtime.Addrs()` / `SubAddr()` 取地址（内部加锁）——
@@ -480,6 +487,32 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
     - 调试旁证：`m_builder`（`GameTimer+0x14` 的 StringBuilder）内容形如 `H:MM:SS`，
       用于遥测；实测它与 `CurrentTime` 对得上（本次定位时读到 `0:03:30` ↔
       `CurrentTime = 211.49s`）。
+
+14. **世界状态：三把钥匙 / 三个元素（暂停界面右下六个图标）**
+    这些是**纯静态类**的 `static bool`，不在任何对象链上：
+
+    ```
+    public static class Keys   { GinsoTree; ForlornRuins; MountHoru; }        // 三把钥匙
+    namespace Sein.World { static class Events {
+        GinsoTreeEntered; MistLifted; WaterPurified; WindRestored; GumoFree;
+        SpiritTreeReached; WarmthReturned; DarknessLifted; m_gravityActivated; } } // 世界事件
+    ```
+
+    - 暂停界面图标由 `WorldState` 枚举 + `SeinWorldStateCondition` 条件读取它们
+      （`WorldState.GinsoTreeKey → Keys.GinsoTree`、`WaterPurified → Events.WaterPurified` …）。
+    - 由 `SeinWorldState.Serialize()` 写进存档；`OnGameReset()` 会把它们全部清零
+      （回到标题/重开时）。游戏自己的 `SetSeinWorldStateAction` 就是触发器用的赋值入口。
+    - **字段地址 = `u32(MonoVTable + 0x0C) + 字段偏移`**（mono 类静态数据块）。
+      我们已实现 `Runtime.KeysAddr()`：按字段名反查描述符 → klass → 在 vtable 带找
+      MonoVTable（`u32(V)==klass` 且 `+0x0C` 指向"字节全 ≤1"的小块）→ 静态块基址。
+      实测 `Keys` 偏移: GinsoTree+0 / ForlornRuins+1 / MountHoru+2；
+      `Events` 偏移: GinsoTreeEntered+0 / MistLifted+1 / WaterPurified+2 /
+      WindRestored+3 / GumoFree+4 / SpiritTreeReached+5 / WarmthReturned+6 /
+      DarknessLifted+7 / m_gravityActivated+8。
+    - **"获得三把钥匙"只置前三个 bool**（低风险，等价捡钥匙）。
+      三个元素标记**故意不做**：它们驱动 `WorldProgression`（由这些标记反推），
+      会连带影响场景触发/过场/传送；强行置位却不做副本，**内容与能力不会获得、
+      世界状态自相矛盾，容易卡关**（详见 §8-24 的风险记录）。
 
 ## §8 踩坑清单（现象 → 根因 → 修法）
 
@@ -623,14 +656,32 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
     屏幕切到新开的标签页，看起来就像修改器退出。实测：事件查看器无崩溃记录，
     且游戏里 `Difficulty` 仍是 OneLife（说明按键根本没送到修改器）。
     → 修（最终方案）：**放弃 Ctrl+Shift 档，全部收敛为两档**——普通功能用小键盘，
-    特殊功能用 Ctrl+小键盘；一命保护改为 **Ctrl+小键盘 5**（追加在 Ctrl 组末尾）。
-    曾试过 Ctrl+Shift+小键盘 1 → 0 也不行（WT 对这两条都不放行），所以不再在
-    Ctrl+Shift 上纠缠。同理 `ctrl+alt+1..9` 也被 WT 绑成切换标签页，不可用。
+    特殊功能用 Ctrl+小键盘，一命保护排在 Ctrl 组最后（后因新增"获得三把钥匙"，
+    一命保护顺延为 **Ctrl+小键盘 6**）。曾试过 Ctrl+Shift+小键盘 1 → 0 也不行
+    （WT 对这两条都不放行），所以不再在 Ctrl+Shift 上纠缠。
+    同理 `ctrl+alt+1..9` 也被 WT 绑成切换标签页，不可用。
     → 教训：**终端里的全局热键要避开终端宿主自身的默认键位**；换键后用
     "按一下看功能状态有没有变"来确认按键确实到达了程序。
     → 附带的坑：NumLock 关闭时小键盘1=END；而旧版本把 END 绑成"直接退出"
     （`os.Exit(0)`），会让人误以为程序崩了。现已**移除所有"按键直接退出"**：
     退出请用窗口关闭按钮。ESC 仅用于"返回版本选择"，不再是退出。
+
+24. **纯静态类（`Keys` / `Sein.World.Events`）的字段怎么定位**
+    → 现象：按类名找 `Keys` 直接失败（`probe findfield Keys ...` 报"未找到类"）——
+    C# 的 `static class` 没有实例，且它是嵌套类，按"类名 + 实例 vtable"那套都不好使。
+    → 修：改走**字段名描述符**：扫描元数据里的字段名字符串 → 找指向它的 4 字节槽
+    `H`（描述符布局 `{name*, klass*, offset}`）→ 从 `H+4` 拿到 klass 并校验类名；
+    再在 vtable 带（0x2A-0x2B / 0x50-0x53）找 `u32(V)==klass` 且 `u32(V+0x0C)`
+    指向"字节全 ≤1"小块的槽 → `static_data = u32(V+0x0C)`。
+    → 旁证：先确认了 `Events` 当前读数为全 0，并与当前存档一致（`SaveSlotInfo`
+    显示载入的是 `sunkenGlades`、进度 10 的初期档），才相信静态块找对了；
+    另外 `SpiritTreeReached` 不在暂停界面六图标里，不能用它当"必然为 1"的对照。
+    → 教训：**bool 静态字段没法靠"值"来定位**（不像对象指针能顺着引用找），
+    必须走 klass→vtable→static_data 这条链；验证时要找一个"当前状态下确定的值"
+    来交叉印证（或确认当前存档阶段与之自洽）。
+    → 关于"三个元素恢复"标记：可以写，但**不做**——它们反推 `WorldProgression`，
+    跳过副本会让世界状态与内容不一致（见 §7-14）；"三把钥匙"只是库存布尔，
+    才适合做成一键功能。
 
 ## §9 诊断工具 `probe`（等价 CE 的核心能力）
 
@@ -648,6 +699,7 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 | `slotscan <类名> <lo> <hi> [minObj]` | 在指定地址范围内找"指向该类实例的槽位"（**定位早期对象/静态块首选**，如 `slotscan GameTimer 0x063C0000 0x063E0000 0x10000`） |
 | `timer` | 用修改器自身的解析器定位 `GameTimer` 并打印 `CurrentTime`/节流字段（验证"重置时间"） |
 | `onelife [秒]` | 端到端验证"一命保护"：定位难度控制器 → 激活保护 → tick → 打印状态/字段 → 关闭并还原 `Difficulty`（`LowestDifficulty` 全程只读） |
+| `keys` | 只读定位 `Keys` 类静态数据块并打印三把钥匙标记（验证"获得三把钥匙"） |
 | `struct <地址> [字数]` | 转储对象字段并标注指针目标类名 |
 | `read/write <地址> <类型> <值>` | 原始读写（类型支持 i8/i16/i32/u32/f32/f64） |
 | `fields2 <类名>` | 遍历 klass 的字段数组直出（备用） |

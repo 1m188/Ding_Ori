@@ -182,6 +182,26 @@ const (
 	OffTimerTelemetry    = 0x24
 )
 
+// 三把钥匙的静态字段偏移（"获得三把钥匙"功能用）。
+//
+// 游戏用两个**纯静态类**保存世界状态（没有实例，字段全是 static bool）：
+//
+//	public static class Keys { GinsoTree; ForlornRuins; MountHoru; }
+//	namespace Sein.World { static class Events { WaterPurified; WindRestored; WarmthReturned; ... } }
+//
+// 这些字段不在任何对象里，而在 mono 的"类静态数据块"中：
+//
+//	字段地址 = u32(MonoVTable + 0x0C) + 字段偏移
+//
+// 偏移由 mono 字段描述符实测（描述符布局 {name*, klass*, offset}）。
+// 暂停界面的"三钥匙/三元素"图标由 WorldState 条件读这些标记，
+// 详见 README §7-14。
+const (
+	OffKeysGinsoTree    = 0 // Keys.GinsoTree：Ginso Tree 门钥匙
+	OffKeysForlornRuins = 1 // Keys.ForlornRuins：Forlorn Ruins 门钥匙
+	OffKeysMountHoru    = 2 // Keys.MountHoru：Mount Horu 门钥匙
+)
+
 // 生命值单位换算。
 //
 // SeinHealthController.HealthUpgradesCollected => MaxHealth/4 - 3，

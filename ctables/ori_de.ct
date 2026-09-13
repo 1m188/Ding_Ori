@@ -30,7 +30,7 @@
       <CheatEntries>
         <CheatEntry>
           <ID>1001</ID>
-          <Description>"符号含义: sein=SeinCharacter  abilities=SeinAbilities  level=SeinLevel  energy=SeinEnergy  mortality=SeinMortality  health=SeinHealthController  soulflame=SeinSoulFlame  jump=SeinJump  doublejump=SeinDoubleJump  playerab=PlayerAbilities  death=SeinDeathCounter  gw=GameWorld  diffc=DifficultyController  timer=GameTimer"</Description>
+          <Description>"符号含义: sein=SeinCharacter  abilities=SeinAbilities  level=SeinLevel  energy=SeinEnergy  mortality=SeinMortality  health=SeinHealthController  soulflame=SeinSoulFlame  jump=SeinJump  doublejump=SeinDoubleJump  playerab=PlayerAbilities  death=SeinDeathCounter  gw=GameWorld  diffc=DifficultyController  timer=GameTimer  keys=Keys 静态数据块（三把钥匙）"</Description>
           <LastState/>
           <Color>808080</Color>
           <GroupHeader>1</GroupHeader>
@@ -303,7 +303,7 @@
 
     <CheatEntry>
       <ID>1200</ID>
-      <Description>"【特殊功能】Ctrl+小键盘 1-4"</Description>
+      <Description>"【特殊功能】Ctrl+小键盘 1-5"</Description>
       <LastState/>
       <Color>00C000</Color>
       <GroupHeader>1</GroupHeader>
@@ -507,6 +507,43 @@
               <Color>808080</Color>
               <GroupHeader>1</GroupHeader>
             </CheatEntry>
+            <CheatEntry>
+              <ID>1250</ID>
+              <Description>"Ctrl+5 获得三把钥匙 — 把 Keys 静态类的三个 bool 置 1（等价于捡起三把钥匙，不跳过副本内容）"</Description>
+              <LastState/>
+              <Color>00C000</Color>
+              <GroupHeader>1</GroupHeader>
+              <CheatEntries>
+                <CheatEntry>
+                  <ID>1251</ID>
+                  <Description>"Keys.GinsoTree（keys+0，Byte 0/1；暂停界面 Ginso 钥匙图标）"</Description>
+                  <LastState/>
+                  <VariableType>Byte</VariableType>
+                  <Address>keys+0</Address>
+                </CheatEntry>
+                <CheatEntry>
+                  <ID>1252</ID>
+                  <Description>"Keys.ForlornRuins（keys+1；Forlorn Ruins 钥匙图标）"</Description>
+                  <LastState/>
+                  <VariableType>Byte</VariableType>
+                  <Address>keys+1</Address>
+                </CheatEntry>
+                <CheatEntry>
+                  <ID>1253</ID>
+                  <Description>"Keys.MountHoru（keys+2；Mount Horu 钥匙图标）"</Description>
+                  <LastState/>
+                  <VariableType>Byte</VariableType>
+                  <Address>keys+2</Address>
+                </CheatEntry>
+                <CheatEntry>
+                  <ID>1254</ID>
+                  <Description>"符号 keys = Keys 类 mono 静态数据块基址（每次启动变，用 probe bases -xml 更新）；字段在类静态数据块里，非对象链"</Description>
+                  <LastState/>
+                  <Color>808080</Color>
+                  <GroupHeader>1</GroupHeader>
+                </CheatEntry>
+              </CheatEntries>
+            </CheatEntry>
           </CheatEntries>
         </CheatEntry>
 
@@ -515,14 +552,14 @@
 
     <CheatEntry>
       <ID>1300</ID>
-      <Description>"【特殊功能】Ctrl+小键盘 5"</Description>
+      <Description>"【特殊功能】Ctrl+小键盘 6"</Description>
       <LastState/>
       <Color>C00000</Color>
       <GroupHeader>1</GroupHeader>
       <CheatEntries>
         <CheatEntry>
           <ID>1301</ID>
-          <Description>"Ctrl+5 一命保护 — 把 Difficulty 锁为 Easy(0)（死亡不清档，且伤害减半/敌人血量×0.65）；**绝不触碰 LowestDifficulty**（成就判定字段）"</Description>
+          <Description>"Ctrl+6 一命保护 — 把 Difficulty 锁为 Easy(0)（死亡不清档，且伤害减半/敌人血量×0.65）；**绝不触碰 LowestDifficulty**（成就判定字段）"</Description>
           <LastState/>
           <Color>C00000</Color>
           <GroupHeader>1</GroupHeader>
@@ -655,6 +692,10 @@
     </SymbolEntry>
     <SymbolEntry>
       <Name>timer</Name>
+      <Address>00000000</Address>
+    </SymbolEntry>
+    <SymbolEntry>
+      <Name>keys</Name>
       <Address>00000000</Address>
     </SymbolEntry>
   </UserdefinedSymbols>

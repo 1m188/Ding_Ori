@@ -343,7 +343,7 @@ type navEntry struct {
 //
 //	小键盘 1-9/0（普通功能）→ Ctrl+小键盘（特殊功能）
 //
-// 功能表本身已按这个顺序排列，一命保护（Ctrl+小键盘 5）**追加到最后**。
+// 功能表本身已按这个顺序排列，一命保护（Ctrl+小键盘 6）**追加到最后**。
 // 注意不要再把它插到前面的功能之间：那会让"最特殊"的功能夹在中间，
 // 与键位从简单到复杂的顺序不一致。
 func navList(s *session) []navEntry {
@@ -706,7 +706,7 @@ func main() {
 		shiftDown := core.GetAsyncKeyDown(vkShift)
 
 		// 小键盘 1-9 是 0x61-0x69，小键盘 0 是 0x60（全局热键，与焦点无关）
-		// 一命保护（Ctrl+小键盘 5）不在 feats 列表里，单独处理。
+		// 一命保护（Ctrl+小键盘 6）不在 feats 列表里，单独处理。
 		handleDigit := func(digit int) {
 			hit := false
 			for _, f := range s.feats {

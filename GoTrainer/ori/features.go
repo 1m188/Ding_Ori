@@ -503,7 +503,7 @@ var (
 	tickersMu sync.RWMutex
 
 	allTickers []ticker
-	oneLife    = NewOneLifeProtect() // 一命保护（Ctrl+小键盘 5）
+	oneLife    = NewOneLifeProtect() // 一命保护（Ctrl+小键盘 6）
 
 	// featureActivators 记录需要自定义激活/关闭副作用的执行器，
 	// 由 UI 层通过 ActivateFeature/DeactivateFeature 调用。
@@ -831,6 +831,52 @@ func (g *resetTime) Tick(r *Runtime) {
 		g.f.setStatus(fmt.Sprintf("已归零（原 %s）", FormatGameTime(g.orig)))
 	} else {
 		g.f.setStatus("已归零 = 0:00:00")
+	}
+}
+
+// ---------- 获得三把钥匙 ----------
+
+// grantKeys 把三把钥匙的静态标记置 1（Keys.GinsoTree / ForlornRuins / MountHoru）。
+//
+// 机制: 钥匙只是"库存布尔"，开门逻辑（SeinWorldStateCondition → WorldState.*Key）
+// 读的就是这三个静态字段。置 1 等价于走过去捡起钥匙，**不跳过副本内容**，
+// 因此风险远低于直接置元素恢复标记（后者会驱动 WorldProgression，可能卡关）。
+//
+// 字段在 mono 类静态数据块里（对象链取不到），由 Runtime.KeysAddr() 定位，
+// 地址每会话变一次、定位一次即可缓存。
+// 开启期间维持（幂等写入）；关闭不撤销（钥匙已获得，且会随存档持久化）。
+type grantKeys struct {
+	f *Feature
+}
+
+func (g *grantKeys) Tick(r *Runtime) {
+	if !g.f.Active() {
+		return
+	}
+	sd := r.KeysAddr()
+	if sd == 0 {
+		g.f.setStatus("钥匙地址定位中…")
+		return
+	}
+	offs := [3]uint32{OffKeysGinsoTree, OffKeysForlornRuins, OffKeysMountHoru}
+	var v [3]byte
+	for i, off := range offs {
+		cur, ok := r.Proc.ReadU8(sd + off)
+		if !ok {
+			g.f.setStatus("读取钥匙标记失败")
+			return
+		}
+		if cur == 0 {
+			if r.Proc.WriteU8(sd+off, 1) {
+				cur = 1
+			}
+		}
+		v[i] = cur
+	}
+	if v[0] == 1 && v[1] == 1 && v[2] == 1 {
+		g.f.setStatus("三把钥匙已获得 ✓（Ginso / Forlorn / Horu）")
+	} else {
+		g.f.setStatus(fmt.Sprintf("写入中… Ginso=%d Forlorn=%d Horu=%d", v[0], v[1], v[2]))
 	}
 }
 
@@ -1184,6 +1230,11 @@ func BuildFeatures() []*Feature {
 		allTickers = append(allTickers, &resetTime{f: f})
 		return f
 	}
+	newGrantKeys := func(digit int) *Feature {
+		f := NewCtrlFeature(digit, "获得三把钥匙")
+		allTickers = append(allTickers, &grantKeys{f: f})
+		return f
+	}
 	// 键位分配原则: 每个功能只有一个快捷键，两档从简到繁——
 	// 小键盘 1-9/0（普通功能）→ Ctrl+小键盘（特殊功能，一命保护排最后）。
 
@@ -1201,17 +1252,18 @@ func BuildFeatures() []*Feature {
 		newExplore100(2),
 		newGrantAll(3),
 		newResetTime(4),
-		// ===== 特殊功能: Ctrl+小键盘 5（一命保护，见 oneLife）=====
+		newGrantKeys(5),
+		// ===== 特殊功能: Ctrl+小键盘 6（一命保护，见 oneLife）=====
 	}
 }
 
-// CtrlOneLifeDigit 一命保护的键位（Ctrl+小键盘 5，追加在 Ctrl 组末尾）。
+// CtrlOneLifeDigit 一命保护的键位（Ctrl+小键盘 6，追加在 Ctrl 组末尾）。
 //
 // ⚠ 历史：曾用 Ctrl+Shift+小键盘 1/0，都不行——Windows Terminal 默认把
 // Ctrl+Shift+1..9 绑成"新建标签页"（OpenNewTabProfile0..8），按键会被终端
 // 吃掉、根本送不到本程序（表现为"按一下就冒出个新标签页/像修改器退出了"）。
 // 现在统一收敛为两档：小键盘（普通）+ Ctrl+小键盘（特殊），不再用 Ctrl+Shift。
-const CtrlOneLifeDigit = 5
+const CtrlOneLifeDigit = 6
 
 // OneLifeHotkeyLabel 一命保护的键位显示文本。
 func OneLifeHotkeyLabel() string {

@@ -26,6 +26,7 @@
 package ori
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"os"
@@ -62,6 +63,9 @@ type Runtime struct {
 	worldSlot      uint32
 	timerSlot      uint32
 
+	// --- 纯静态类字段（无实例，字段存在 mono 类静态数据块里）---
+	keysStatic uint32 // Keys 类静态数据块基址（三把钥匙的 bool 在 +0/+1/+2）
+
 	// 定位诊断
 	LastScanError string // 失败原因（UI 显示）
 	LastSeinFind  time.Time
@@ -97,6 +101,7 @@ func (r *Runtime) SetProcess(p *core.Process) {
 	r.diffSlot = 0
 	r.worldSlot = 0
 	r.timerSlot = 0
+	r.keysStatic = 0
 	r.LastScanError = ""
 	r.auxBusy = false
 	r.auxTried = time.Time{}
@@ -818,6 +823,214 @@ func scanLowBandAux(p *core.Process, sein uint32) auxFound {
 			sein, len(seen), out.death, out.deathSlot, out.diff, out.diffSlot, out.world, out.worldSlot, out.timer, out.timerSlot)
 	}
 	return out
+}
+
+// ---------- 纯静态类字段定位（Keys 等）----------
+
+// KeysAddr 返回 Keys 类的静态数据块基址（三把钥匙的 bool 在 +0/+1/+2）。
+//
+// 静态数据块在同一进程内地址固定，定位成功后缓存；SetProcess 时清空。
+// 校验方式: 三个字节都必须是 0/1（bool 值域），否则视为失效重新定位。
+func (r *Runtime) KeysAddr() uint32 {
+	r.mu.Lock()
+	sd, p := r.keysStatic, r.Proc
+	r.mu.Unlock()
+	if p == nil {
+		return 0
+	}
+	if sd != 0 {
+		var b [3]byte
+		if p.ReadBytes(sd, b[:]) && b[0] <= 1 && b[1] <= 1 && b[2] <= 1 {
+			return sd
+		}
+		sd = 0
+	}
+	nsd := locateKeysStatic(p)
+	if nsd != 0 {
+		r.mu.Lock()
+		r.keysStatic = nsd
+		r.mu.Unlock()
+	}
+	return nsd
+}
+
+// locateKeysStatic 定位 Keys 类静态数据块。
+//
+// 背景: Keys 是 C# 的 static class，没有实例；mono 把它字段放在"类静态
+// 数据块"里。早期用 findKlassByName 按类名找会失败（嵌套/纯静态类不稳），
+// 因此改走"字段名描述符"这条路:
+//
+//	① 用字段名（如 "GinsoTree"）在元数据里反查描述符 {name*, klass*, offset};
+//	② 校验 klass 的类名 == "Keys";
+//	③ 在 vtable 带内找 MonoVTable（u32(V)==klass 且 u32(V+0x0C) 指向一块
+//	   字节值全 ≤1 的小块）→ static_data = u32(V+0x0C)。
+func locateKeysStatic(p *core.Process) uint32 {
+	klass := findKlassByFieldName(p, "GinsoTree", "Keys")
+	if klass == 0 {
+		return 0
+	}
+	return findStaticData(p, klass, 3)
+}
+
+// klassNameOf 校验一个地址是否为 self-ref 的 mono klass，并读它的类名。
+func klassNameOf(p *core.Process, k uint32) (string, bool) {
+	if !isPtr(k) {
+		return "", false
+	}
+	if k0, ok := p.ReadU32(k); !ok || k0 != k { // klass 自指
+		return "", false
+	}
+	np, ok := p.ReadU32(k + 0x30)
+	if !ok || !isTextPtr(np) {
+		return "", false
+	}
+	s := readIdent(p, np)
+	if s == "" {
+		return "", false
+	}
+	return s, true
+}
+
+// findKlassByFieldName 通过字段名反查其声明类 klass（wantKlass 用于校验）。
+//
+// 字段描述符布局（本版 mono，实测）: +0x00 name* / +0x04 klass* / +0x08 offset。
+// 描述符槽位本身位于元数据带，用"指向字段名字符串的 4 字节槽"反查。
+func findKlassByFieldName(p *core.Process, fieldName, wantKlass string) uint32 {
+	needle := append([]byte(fieldName), 0)
+	const chunk = 4 << 20
+	buf := make([]byte, chunk)
+	for _, reg := range p.ReadableRegions() {
+		if reg.Base >= 0x30000000 {
+			continue
+		}
+		for off := uint32(0); off < reg.Size; off += chunk {
+			n := reg.Size - off
+			if n > chunk {
+				n = chunk
+			}
+			if n < uint32(len(needle)) {
+				break
+			}
+			b := buf[:n]
+			if !p.ReadBytes(reg.Base+off, b) {
+				continue
+			}
+			from := 0
+			for {
+				j := bytes.Index(b[from:], needle)
+				if j < 0 {
+					break
+				}
+				sAddr := reg.Base + off + uint32(from+j)
+				from += j + 1
+				for _, h := range findSlotsWithValue(p, sAddr) {
+					kl, ok := p.ReadU32(h + 4)
+					if !ok || !isPtr(kl) {
+						continue
+					}
+					if off8, ok2 := p.ReadU32(h + 8); !ok2 || off8 > 0x4000 {
+						continue
+					}
+					if nm, ok3 := klassNameOf(p, kl); ok3 && nm == wantKlass {
+						return kl
+					}
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// findSlotsWithValue 找出所有"存放 4 字节值 v"的 4 对齐槽位。
+func findSlotsWithValue(p *core.Process, v uint32) []uint32 {
+	var out []uint32
+	const chunk = 4 << 20
+	buf := make([]byte, chunk)
+	nd := [4]byte{byte(v), byte(v >> 8), byte(v >> 16), byte(v >> 24)}
+	for _, reg := range p.ReadableRegions() {
+		for off := uint32(0); off < reg.Size; off += chunk {
+			n := reg.Size - off
+			if n > chunk {
+				n = chunk
+			}
+			if n < 4 {
+				break
+			}
+			b := buf[:n]
+			if !p.ReadBytes(reg.Base+off, b) {
+				continue
+			}
+			for i := 0; i+4 <= len(b); i += 4 {
+				if b[i] == nd[0] && b[i+1] == nd[1] && b[i+2] == nd[2] && b[i+3] == nd[3] {
+					out = append(out, reg.Base+off+uint32(i))
+				}
+			}
+		}
+	}
+	return out
+}
+
+// vtableBand 判断地址是否可能是 MonoVTable 所在带。
+// 实测 vtable 位于 mono 元数据带(0x2A-0x2B)或 0x50-0x53 段。
+func vtableBand(base uint32) bool {
+	return (base >= 0x2A000000 && base < 0x2C000000) ||
+		(base >= 0x50000000 && base < 0x54000000)
+}
+
+// findStaticData 找 klass 的 MonoVTable，返回其静态数据块基址。
+//
+// 判据（逐条实测）: 槽 V 满足 u32(V)==klass；+0x08 是合法指针（mono 的共享
+// 运行期指针，可作 vtable 标记）；static_data=u32(V+0x0C) 可读且前 n 字节
+// 全 ≤1（bool 值域）。这样能排除"恰好在别的结构里出现 klass 指针"的槽。
+func findStaticData(p *core.Process, klass uint32, n int) uint32 {
+	const chunk = 4 << 20
+	buf := make([]byte, chunk)
+	for _, reg := range p.ReadableRegions() {
+		if !vtableBand(reg.Base) {
+			continue
+		}
+		for off := uint32(0); off < reg.Size; off += chunk {
+			sz := reg.Size - off
+			if sz > chunk {
+				sz = chunk
+			}
+			if sz < 16 {
+				break
+			}
+			b := buf[:sz]
+			if !p.ReadBytes(reg.Base+off, b) {
+				continue
+			}
+			for i := 0; i+16 <= len(b); i += 4 {
+				if u32at(b, i) != klass {
+					continue
+				}
+				V := reg.Base + off + uint32(i)
+				if mk, ok := p.ReadU32(V + 0x08); !ok || !isPtr(mk) {
+					continue
+				}
+				sd, ok := p.ReadU32(V + 0x0C)
+				if !ok || sd == 0 || !isPtr(sd) {
+					continue
+				}
+				t := make([]byte, n)
+				if !p.ReadBytes(sd, t) {
+					continue
+				}
+				good := true
+				for _, c := range t {
+					if c > 1 {
+						good = false
+						break
+					}
+				}
+				if good {
+					return sd
+				}
+			}
+		}
+	}
+	return 0
 }
 
 // ---------- 快照（TUI 渲染用）----------

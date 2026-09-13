@@ -193,6 +193,8 @@ func main() {
 		cmdTimer(p)
 	case "onelife":
 		cmdOneLife(p)
+	case "keys":
+		cmdKeys(p)
 	default:
 		usage()
 	}
@@ -1984,6 +1986,34 @@ func cmdOneLife(p *core.Process) {
 	}
 }
 
+// cmdKeys 只读打印"三把钥匙"的静态标记（Keys 类静态数据块）。
+//
+//	probe keys
+func cmdKeys(p *core.Process) {
+	prof := probeProfile()
+	rt := &ori.Runtime{Prof: &prof}
+	rt.SetProcess(p)
+	var sd uint32
+	for i := 0; i < 24; i++ {
+		if sd = rt.KeysAddr(); sd != 0 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if sd == 0 {
+		fmt.Println("未定位到 Keys 静态数据块")
+		return
+	}
+	b := make([]byte, 3)
+	if !p.ReadBytes(sd, b) {
+		fmt.Println("读取失败")
+		return
+	}
+	fmt.Printf("Keys static_data = 0x%08X\n", sd)
+	fmt.Printf("  GinsoTree(+%d)=%d  ForlornRuins(+%d)=%d  MountHoru(+%d)=%d\n",
+		ori.OffKeysGinsoTree, b[0], ori.OffKeysForlornRuins, b[1], ori.OffKeysMountHoru, b[2])
+}
+
 func cmdSingleton(p *core.Process) {
 	if len(os.Args) < 3 {
 		fmt.Println("usage: probe singleton <ClassName> [minObjHex]")
@@ -2315,7 +2345,7 @@ func cmdBases(p *core.Process) {
 	mor := rd(sein + ori.OffSeinMortality)
 	names := []string{
 		"sein", "abilities", "level", "energy", "mortality", "health",
-		"soulflame", "jump", "doublejump", "playerab", "death", "gw", "diffc", "timer",
+		"soulflame", "jump", "doublejump", "playerab", "death", "gw", "diffc", "timer", "keys",
 	}
 	vals := []uint32{
 		sein,
@@ -2332,6 +2362,7 @@ func cmdBases(p *core.Process) {
 		rt.GameWorldAddr(),
 		rt.SubAddr("diff"),
 		rt.TimerAddr(),
+		rt.KeysAddr(),
 	}
 	if asXML {
 		fmt.Println("  <UserdefinedSymbols>")
