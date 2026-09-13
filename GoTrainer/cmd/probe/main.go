@@ -69,13 +69,27 @@ type state struct {
 	Addrs []uint32 `json:"addrs"`
 }
 
+// probeProfile 按命令行是否含 -vanilla 选择目标版本。
+//
+//	probe <cmd> ...           默认终极版 oriDE.exe
+//	probe <cmd> ... -vanilla  原版 ori.exe（字段偏移需用 offs 重新核验）
+func probeProfile() ori.Profile {
+	for _, a := range os.Args {
+		if a == "-vanilla" {
+			return ori.Profiles[ori.Vanilla]
+		}
+	}
+	return ori.Profiles[ori.Definitive]
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
 		return
 	}
 	cmd := os.Args[1]
-	p, err := core.Attach("oriDE.exe")
+	prof := probeProfile()
+	p, err := core.Attach(prof.ProcessName)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "attach:", err)
 		os.Exit(1)
@@ -163,6 +177,8 @@ func main() {
 		cmdHeapFind(p)
 	case "feats":
 		cmdFeats()
+	case "bases":
+		cmdBases(p)
 	case "strref":
 		cmdStrRef(p)
 	case "fields2":
@@ -600,7 +616,7 @@ func cmdDiag(p *core.Process) {
 			auxWait = true
 		}
 	}
-	prof := ori.Profiles[ori.Definitive]
+	prof := probeProfile()
 	rt := &ori.Runtime{Prof: &prof}
 	rt.SetProcess(p)
 	t0 := time.Now()
@@ -2112,6 +2128,84 @@ func parseHex(s string) uint64 {
 	return n
 }
 
+// cmdBases 打印 CE 表所需的全部基址符号。
+//
+//	probe bases        人读格式
+//	probe bases -xml   直接输出 <UserdefinedSymbols> 块，粘贴进 .ct 即可
+//
+// 用途: ctables/*.ct 的地址都写成 "符号+偏移"（如 level+24），
+// 换会话时只要重新跑一次本命令、把符号值更新进去，整张表即可用。
+// 这比在 CE 里手工重新找基址快得多，也保证表与修改器用同一套定位结果。
+func cmdBases(p *core.Process) {
+	asXML := false
+	for _, a := range os.Args {
+		if a == "-xml" {
+			asXML = true
+		}
+	}
+	prof := probeProfile()
+	rt := &ori.Runtime{Prof: &prof}
+	rt.SetProcess(p)
+	if !rt.Refresh() {
+		fmt.Println("定位失败（请先进入存档）")
+		return
+	}
+	// 附属单例是后台异步定位的，等一会儿
+	for i := 0; i < 12; i++ {
+		if rt.DeathCounterAddr() != 0 && rt.GameWorldAddr() != 0 {
+			break
+		}
+		time.Sleep(time.Second)
+		rt.Refresh()
+	}
+	rd := func(a uint32) uint32 {
+		if a == 0 {
+			return 0
+		}
+		v, _ := p.ReadU32(a)
+		return v
+	}
+	sein := rt.SeinCharacterAddr()
+	mor := rd(sein + ori.OffSeinMortality)
+	names := []string{
+		"sein", "abilities", "level", "energy", "mortality", "health",
+		"soulflame", "jump", "doublejump", "playerab", "death", "gw", "diffc",
+	}
+	vals := []uint32{
+		sein,
+		rd(sein + ori.OffSeinAbilities),
+		rt.SeinLevelAddr(),
+		rd(sein + ori.OffSeinEnergy),
+		mor,
+		rd(mor + ori.OffMortalityHealth),
+		rt.SubAddr("soulflame"),
+		rt.SubAddr("jump"),
+		rt.SubAddr("doublejump"),
+		rd(sein + ori.OffSeinPlayerAbil),
+		rt.DeathCounterAddr(),
+		rt.GameWorldAddr(),
+		rt.SubAddr("diff"),
+	}
+	if asXML {
+		fmt.Println("  <UserdefinedSymbols>")
+		for i, n := range names {
+			if vals[i] == 0 {
+				continue
+			}
+			fmt.Printf("    <SymbolEntry>\n      <Name>%s</Name>\n      <Address>%08X</Address>\n    </SymbolEntry>\n", n, vals[i])
+		}
+		fmt.Println("  </UserdefinedSymbols>")
+		return
+	}
+	for i, n := range names {
+		note := ""
+		if vals[i] == 0 {
+			note = "   (未定位)"
+		}
+		fmt.Printf("%-11s = 0x%08X%s\n", n, vals[i], note)
+	}
+}
+
 // cmdFeats 打印修改器的功能与键位表，并检测键位重复。
 //
 //	probe feats
@@ -2652,7 +2746,7 @@ func cmdFeat(p *core.Process) {
 			secs = n
 		}
 	}
-	prof := ori.Profiles[ori.Definitive]
+	prof := probeProfile()
 	rt := &ori.Runtime{Prof: &prof}
 	rt.SetProcess(p)
 	if !rt.Refresh() {

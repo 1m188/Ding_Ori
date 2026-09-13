@@ -1,137 +1,33 @@
 # OriTrainer (Go) — 奥日与迷失森林 双版本修改器
 
-风灵月影风格的 Go TUI 修改器，一个程序支持两个版本（启动时选择入口）：
+风灵月影风格的 TUI 修改器，一个 exe 支持两个版本：
 
-- **原版**《Ori and the Blind Forest》（appid 261570，buildid 814852）
-- **终极版**《Ori and the Blind Forest: Definitive Edition》（appid 387290，buildid 1096284）
+- **原版**《Ori and the Blind Forest》（`ori.exe`）
+- **终极版**《Ori and the Blind Forest: Definitive Edition》（`oriDE.exe`）
 
-**纯标准库实现（零外部依赖），单 exe 发布。**
+**纯 Go 标准库实现（零外部依赖），单 exe 发布。**
+本 README 分两部分：前面是**使用文档**，后面是**维护手册 / 逆向知识库**——
+后者记录了本项目所有逆向结论、踩过的坑与维护流程，目的就是让**完全不了解
+上下文的新会话**能在最短时间内接手。
+
+> 当前状态：**终极版功能已实测可用；原版未做验证**（我们的逆向工作全部在终极版
+> 完成，原版字段偏移未核验，见 `ctables/ori_vanilla.ct` 的说明）。
+
+---
+
+# 一、使用文档
 
 ## 使用
 
-1. 启动 `GoTrainer.exe`（管理员权限），在版本选择界面用 ↑↓/WS 选择、回车进入。
-2. 启动对应游戏并进入存档；修改器自动附加，约 **0.3-1 秒**内定位活体玩家对象
-   （旧版需 15 秒全堆扫描，已废弃），TUI 显示 `● 已附加` / `Sein 已定位` /
-   实时数值后即可使用。
-3. ESC 可随时返回版本选择切换另一版。
+1. 以管理员权限启动 `GoTrainer.exe`，在版本选择界面用 ↑↓/WS 选择，回车进入。
+2. 启动对应游戏并进入存档。修改器自动附加，约 **0.2–1 秒**内定位活体玩家对象
+   （横向对比：早期版本是全堆扫描 9–15 秒，且经常定位失败）。
+3. ESC 可随时返回版本选择（仅在修改器窗口有焦点时生效）。
 
-### 定位原理（2026-09 二次修正）
+## 热键（三档）
 
-定位游戏对象经历过三轮踩坑，这里记录最终结论，避免后人重犯：
-
-**坑 1 — 锁定到传送门克隆体。** 早期用"全堆盲扫 + 弱校验"，结果命中
-`CloneOfSeinForPortals` 的副本 Sein：结构完整、内存合法，但游戏从不使用，
-所以**所有写入毫无效果**。
-
-**坑 2 — 地址范围上限写错（真正的失效根因）。**
-
-进程是 32 位、带 `/LARGEADDRESSAWARE`，**托管堆横跨 `0x50xxxxxx`–`0x7Bxxxxxx`**。
-玩家对象在死亡重生后会重新分配到 `0x73xxxxxx` 这类高地址。旧代码把
-"堆指针"上限写成 `0x70000000`，高地址对象一律被当成非法值过滤掉，于是：
-
-- 玩家一旦重生到高地址，扫描再也找不到 → "死亡之后死活没用"；
-- 重开修改器时同样找不到 → 一直显示"Sein 扫描中…"；
-- 死亡计数等单例对象也在高地址，同样定位失败。
-
-> 我一度误以为锚点槽变成了随机数据（把指针字节 `20 34 6E 73` 读成文本
-> `" 4ns"`）。实际上那是 `0x736E3420` —— 正是重生后的玩家对象。锚点一直
-> 是对的，只是它的值被范围上限判为非法。事后核对锚点相邻布局确认为
-> `Characters` 静态块：`[Sein, BabySein, Naru, Current, Ori]`
-> = `[0x736E3420, 0, 0, 0x736E3420, 0x7B3DAD48]`，与源码字段顺序完全一致。
-
-**坑 3 — 类名字符串的 4 字节对齐假设。** mono 的类名字符串在元数据区
-**紧凑拼接、不保证 4 字节对齐**（实测 `SeinDeathCounter` 的名字在
-`0x2AFB8F4D`）。旧代码对字符串指针做了 `&3==0` 校验，导致所有类名解析
-静默失败，单例定位器永远返回 0。修好坑 2 后这一条才暴露出来。
-
-**坑 4 — 缓存对象指针而非静态字段。** 早期版本把找到的对象地址长期缓存，
-只在结构校验失败时才重扫。角色重生后，旧对象在 GC 回收前内存依旧"看起来
-合法"，于是继续写一个已经没用的对象——表现为"用着用着突然没效果"。
-现在改为缓存**静态槽地址**并每周期重读。
-
-最终实现（`ori/resolver.go`）：
-
-1. **每周期都以游戏静态字段为准**：缓存 `Characters.Sein` 所在槽位地址，
-   每次刷新重读该槽，而不是长期信任某个对象指针。角色重生时游戏会改写
-   静态字段，槽内容自动指向新对象，因此能立刻跟上。
-2. 槽失效时才回退扫描重新发现锚点（低区约 0.2 秒，仍失败则全地址空间兜底）。
-3. 地址范围放宽到完整 32 位用户空间；字符串指针不要求对齐。
-4. 所有扫描按 4MB 分块读取（旧实现按整段分配，堆变大后可致进程 OOM 退出）。
-
-对象链（偏移均经 mono 元数据核验）：
-
-```
-SeinCharacter +0x38 -> SeinLevel      +0x3C -> SeinEnergy
-              +0x40 -> SeinMortality  -> +0x0C -> SeinHealthController
-              +0x28 -> SeinSoulFlame  +0x10 -> SeinAbilities
-                                              +0x0C -> SeinJump
-                                              +0x08 -> SeinDoubleJump
-```
-
-死亡计数器与难度控制器同样采用"静态槽缓存 + 每周期重读"，后台异步定位，
-失败按指数退避重试，不阻塞 UI。
-
-### 稳定性相关的其他修正
-
-- **界面按键改为读控制台输入缓冲**（见上文"热键"）：在游戏里按 ESC（打开
-  暂停菜单）曾被误判为"返回版本选择"，再按一次直接退出程序——这是"修改器
-  莫名消失"的主因。曾先后尝试"全局抑制"与"正向判定修改器窗口在前台"，
-  前者会误触、后者在 Windows Terminal 等宿主下永远失败（导致选择界面
-  完全无法操作）。最终改为读 `CONIN$` 的输入事件：只有拥有键盘焦点的
-  控制台才会收到事件，两条需求同时满足且不依赖任何宿主启发式。
-  自测命令 `probe conin` 会注入合成按键并读回，无需人工操作即可验证该通路。
-- **消除全局执行器列表的数据竞争**：在版本选择与修改器界面之间反复切换时，
-  新会话重建功能表，而旧会话的功能引擎协程可能仍在遍历该列表。并发读写
-  切片头可致越界 panic 并使进程静默退出。现以 `tickersMu` 保护。
-- 后台协程加 panic 兜底，异常时提示而非退出。
-
-### 字段偏移来源
-
-`ori/offsets.go` 是**唯一的地址维护点**。所有偏移均经两条独立途径交叉验证：
-
-1. 从游戏 `Assembly-CSharp.dll` 反编译源码取字段声明顺序；
-2. 运行期从目标进程的 mono 元数据直读字段描述符（等价 CE 的 mono dissect）。
-
-诊断工具 `GoTrainer/cmd/probe` 提供 `fields2` / `offs` / `strref` / `findall` /
-`singleton` / `diag` / `corereg` / `racetest` / `feat` 等命令，可对活体进程复查
-任意字段偏移、区域覆盖与功能效果，无需重新编译修改器。
-设置环境变量 `ORITRAINER_DEBUG=1` 可输出辅助定位诊断。
-
-### 热键（全局，免切窗）
-
-每个功能只有**一个**快捷键。分配原则：优先填满小键盘 1-9/0（10 个），
-超出部分用 Ctrl+小键盘（1 起）。原版与终极版各自独立（两者不会同时运行）。
-
-按键按作用域分两类（`main.go` 顶部注释有完整说明）：
-
-| 类别 | 键 | 生效条件 |
-|---|---|---|
-| 全局热键 | 小键盘 1-9/0、Ctrl+小键盘 1-6（功能开关） | **只要修改器进程在运行**，前后台无关 |
-| 界面按键 | ↑↓/W/S、回车/空格、ESC、HOME、F1、F12、END | 仅修改器窗口拥有键盘焦点时 |
-
-界面按键的实现读的是**控制台输入缓冲**（`CONIN$` + `ReadConsoleInputW`）：
-系统只往拥有键盘焦点的控制台投递输入事件，所以"仅前台响应"是天然保证的，
-不依赖窗口标题/父进程链等启发式（那类启发式在 Windows Terminal 等宿主下
-全部失效，曾导致选择界面无法操作、游戏内按 ESC 误触退出）。
-若控制台输入不可用（标准输入被重定向且无控制台），界面按键退化为
-"全局热键 + 游戏前台抑制"（`core.GameFocusedAny`）。
-
-| 键 | 作用 |
-|---|---|
-| 小键盘 1-9/0 | 前 10 项功能（全局）|
-| Ctrl+小键盘 1-6 | 后 6 项功能（含一命保护；Ctrl+1 为一命保护）（全局）|
-| HOME | 关闭全部（本窗口内）|
-| F12 | 重新附加/重扫（本窗口内）|
-| F1 | 帮助（本窗口内）|
-| ESC | 返回版本选择（修改器界面）/ 退出（选择界面）（本窗口内）|
-| END | 退出（本窗口内）|
-
-## 功能（键位对齐风灵月影《终极版》v1.0 Plus 13）
-
-**全局热键只用小键盘**（避免与笔记本键盘功能键/主键盘冲突）；没有小键盘的键盘
-可切到修改器窗口用 ↑↓ 选择、回车/空格切换（见下方"前台导航"）。
-
-键位分三档（每档内按顺序编号，无空位、无重复）：
+键位分三档，每档内按顺序编号，**无空位、无重复**。三档互斥由"两个修饰键状态
+都要精确匹配"保证——按 Ctrl+Shift+N 时，小键盘 N 与 Ctrl+N 都不会被误触发。
 
 **基础能力 —— 小键盘 1-9/0**
 
@@ -140,7 +36,7 @@ SeinCharacter +0x38 -> SeinLevel      +0x3C -> SeinEnergy
 | 小键盘 1 | 无限生命 | ✓ 实测（按"球"显示，补满到上限） |
 | 小键盘 2 | 无限能量 | ✓ 实测（上限为 0 时提示暂无可补） |
 | 小键盘 3 | 灵魂链接无需冷却 | ✓ 实测（冷却归零） |
-| 小键盘 4 | 可在不安全区域建立灵魂链接 | ✓ 实测（已修"进不去技能树"） |
+| 小键盘 4 | 可在不安全区域建立灵魂链接 | ✓ 实测 |
 | 小键盘 5 | 超级跳 | ✓ 实测（同时放大 6 个跳跃高度字段） |
 | 小键盘 6 | 无限二段跳 | ✓ 实测（同时开启二段跳能力） |
 | 小键盘 7 | 无限能力点数 | ✓ 实测（不足才补满，目标 99） |
@@ -157,7 +53,7 @@ SeinCharacter +0x38 -> SeinLevel      +0x3C -> SeinEnergy
 
 | 热键 | 功能 | 状态 |
 |---|---|---|
-| Ctrl+Shift+小键盘 1 | 一命保护 | ⚠ 未生效，见下文"一命保护" |
+| Ctrl+Shift+小键盘 1 | 一命保护 | ⚠ **未生效**（目标对象定位不到，见维护手册 §11） |
 
 **界面按键（仅修改器窗口有焦点时生效）**
 
@@ -165,290 +61,575 @@ SeinCharacter +0x38 -> SeinLevel      +0x3C -> SeinEnergy
 |---|---|
 | ↑↓ / WS | 选择功能项 |
 | 回车 / 空格 | 激活或取消选中功能 |
-| HOME | 关闭全部 |
-| F12 | 重新附加/重扫 |
-| F1 | 帮助 |
-| ESC | 返回版本选择 |
-| END | 退出 |
+| HOME / F12 / F1 / ESC / END | 全关 / 重扫 / 帮助 / 返回版本选择 / 退出 |
 
-> 三档互斥由"两个修饰键状态都要精确匹配"保证：按 Ctrl+Shift+N 时，
-> 只匹配 NeedCtrl && NeedShift 的功能，小键盘 N 与 Ctrl+N 都不会被误触发。
-> 新增/调整功能后请用 `probe feats` 打印键位表并自动检测重复
-> （输出"键位检查: 无重复 ✓"）——**必须用对构造器**：
-> `NewFeature`=小键盘、`NewCtrlFeature`=Ctrl、`NewCtrlShiftFeature`=Ctrl+Shift。
-> 放错构造器就会撞键（已踩过两次）。
+## 功能语义
 
-> 已按实测反馈移除：**满生命球**、**满能量球**（有无限生命/能量后无意义）、
-> **超级跳冲量**、**二段跳强化**、**无限经验**、**经验倍率 2x/4x/8x/16x**。
+- **无限生命 / 无限能量 = 持续补满到上限**：每周期读上限并写满当前值。
+  残血/空能量时激活也会立即补满。
+- **超级跳 / 无限二段跳 = 捕获原值后放大 / 维持，关闭时还原**。
+- **无限能力点数 = 不足才补满**：低于 99 才写，达到或超过不动（原因见 §8-13）。
+- **100% 探索 / 解锁全部基础技能 = 一次性动作型**：开启期间维持，关闭不做任何事，
+  再次开启仍会把缺的补上。
+- **死亡数归零 = 固定目标值**：无条件写 0，适合"无死亡通关"成就。
 
-### 新增功能说明（基础技能 / 探索）
+---
 
-- **解锁全部基础技能**：只解锁**暂停界面显示的那 11 项基础能力**，清单见
-  `ori/offsets.go` 的 `BaseAbilityOffsets`（精灵之火 / 飞檐走壁 / 充能烈焰 /
-  二段跳 / 猛击 / 践踏攻击 / 黑子之羽 / 攀爬 / 充能跳跃 / 光芒爆裂 / 冲刺）。
-  已拥有的跳过（幂等）；关闭时不做任何事，再次开启仍会把缺的补上。
+# 二、维护手册 / 逆向知识库
 
-  > **为什么不给技能树里的被动**：游戏把"基础能力"和"灵魂链接技能树里用能力点
-  > 买的被动"建模成**同一个类型**（`CharacterAbility`，只有一个 `HasAbility`
-  > 布尔），因此无法靠类型区分，只能按字段清单区分。技能树被动
-  > （`RapidFire` / `UltraDefense` / 各种 `*Efficiency` / `*Upgrade` /
-  > `MapMarkers` 等）**一律不在清单内**，由玩家用"无限能力点数"自己去技能树买。
-  > 实测验证：清空基础能力"冲刺"后功能会补回；清空技能树被动"UltraDefense"
-  > 后功能不会动它。
+## §0 新会话从这里开始
 
-  > 4 项地图标记（`MapMarkers`/`HealthMarkers`/`EnergyMarkers`/`AbilityMarkers`）
-  > 也属于技能树被动，**不会**被本功能解锁。
-  > 补充：这四项的效果是"让地图显示某类收集品图标"，但**它们不参与完成度计算**
-  > （`IconIsCompletionType` 只认可 Keystone / HealthUpgrade / EnergyUpgrade /
-  > AbilityPoint / Experience / MapstonePickup）。
+**这个项目是什么**：一个 Go 写的进程内存读写工具（TUI），通过定位游戏
+（Unity + mono，32 位进程）里的托管对象、按字段偏移读写来生效。
 
-  注意：游戏只在"正规授予"时才实例化能力组件（`PlayerAbilities.SetAbility` →
-  `Prefabs.EnsureRightPrefabsAreThereForAbilities`）。这里只写标志位，因此少数
-  能力（滑翔/冲刺/猛击等非默认实例化的）其组件可能要等**存档重载或场景切换**
-  后才实体化生效。
-- **100% 探索**：`GameWorld.RuntimeAreas` 是 `List<RuntimeGameWorldArea>`，
-  逐个把 `m_completionAmount` 置 1 并清掉 `m_dirtyCompletionAmount`
-  （避免游戏重算覆盖）。`GameWorld.Instance` 可正常定位。
-  实测能写入绝大多数区域；若某区域对象为空则跳过（界面百分比取各区域平均）。
+**30 秒理解核心机制**：
 
-  > **注意这只能解锁"完成地图"成就，不是"找齐秘密"**：
-  > `CompleteMapAchievementAsset` 每 5 秒采样 `GameWorld.CompletionAmount ≈ 1`，
-  > 正是本功能驱动的值，所以能解锁它。
-  > 但"翻遍每一寸土地"（`FindAllSecretsAchievementAsset`）只在
-  > `AchievementsLogic.RevealTransparentWall()` 里发放——穿过的**半透明隐藏墙**
-  > 计数到 45 面才给，与地图百分比、与收集品图标都无关，**本功能给不了**，
-  > 仍需自己去探索。
-  > 另：所有成就的发放都被 `!CheatsHandler.DebugWasEnabled` 拦着，
-  > 一旦游戏内调试菜单被启用过，成就将不再解锁。
+1. 游戏是 32 位 mono 进程，所有关心的对象都在**托管堆**上，**每次启动地址都会变**。
+2. 游戏自己的静态字段 `Characters.Sein` / `Characters.Current` 总是指向"活体玩家"，
+   且两者在内存里相隔 12 字节、值相同（形如 `[P, 0, 0, P, …]`）。
+3. 我们在**低地址区**扫这个模式 → 拿到槽位地址 → **每周期重读该槽**（而不是缓存
+   对象地址），于是角色重生也能立刻跟上。
+4. 拿到玩家对象后，其余对象都是**沿对象链直读**（见 §3 的链）。
+5. 字段偏移**不能靠源码声明的顺序推算**（mono 会重排），必须用
+   `probe offs` 从运行中的 mono 元数据里读（见 §4）。
 
-### 未实现：重置时间
+**改一个功能的标准流程**（详见 §10）。
 
-游玩时间由 `GameTimer.CurrentTime`（float，秒）承载。要写它就得先找到
-`GameTimer` 实例，但：
+**代码地图**：
 
-- `GameTimer` 挂在 `GameController` 上（`GameController.Timer`），
-  而 `GameController` 与 `GameTimer` 在运行中的进程里**都无法定位**
-  ——与一命保护的 `DifficultyController` 同一个原因: `Instance` 静态字段
-  没有指向可找到的实例，全堆无过滤扫描（`probe heapfind`）也找不到活体实例。
-- 已知一条可行线索: `SaveSceneManager`（可定位，低区静态槽）持有
-  `List<SaveId> SaveData`(+0x10)，每项的 `SaveObject` 就是**全部可存档对象**。
-  后续可从该列表取出 `GameTimer` / `DifficultyController` / `GameController`，
-  从而一次解决"重置时间"与"一命保护"两个功能。本次时间有限未做。
-
-### 实机机制要点（终极版）
-
-以下结论均经"反编译源码 + 活体内存"双重核对，改功能前务必先读：
-
-**① 生命值的单位是"点"，不是"球"。**
-`SeinHealthController.HealthUpgradesCollected => MaxHealth/4 - 3`，即
-**1 个生命球 = 4 点**。初始 3 球在内存里是 `12`。修改器界面已统一按球显示
-（`HealthPointsPerCell`），否则会出现"显示 12 血、游戏里只有 3 血"的错觉。
-
-**② 超级跳必须同时放大 6 个字段。** 跳跃高度不是一个变量，
-`SeinJump.PerformJump()` 按情形分支，且各自还会轮换：
-
-| 情形 | 使用的字段 |
+| 文件 | 职责 |
 |---|---|
-| 移动中跳 / 站立跳 | 依次轮换 `FirstJumpHeight` → `SecondJumpHeight` → `ThirdJumpHeight` |
-| 贴墙下滑跳 | `FirstJumpHeight` |
-| 蹲跳 | `CrouchJumpHeight` |
-| 转身后空翻 | `BackflipJumpHeight` |
+| `GoTrainer/main.go` | TUI 渲染、按键（控制台输入 + 全局热键）、会话协程 |
+| `GoTrainer/core/memory.go` | 进程附加、RPM/WPM、区域枚举、控制台输入、存档回滚工具 |
+| `GoTrainer/ori/resolver.go` | 对象定位（活体玩家 / 各单例）、快照读取 |
+| `GoTrainer/ori/features.go` | 功能定义与执行器（冻结/补满/放大/置位/遍历） |
+| `GoTrainer/ori/offsets.go` | **唯一地址维护点**：所有字段偏移常量 |
+| `GoTrainer/cmd/probe/main.go` | 诊断工具（等价 CE 的核心能力），见 §9 |
+| `ctables/ori_de.ct` / `ori_vanilla.ct` | 与修改器同步的 CE 表，见 §10 |
 
-只放大 `FirstJumpHeight` 会表现为"每两三次才有一次跳得高"。
-另: 跳跃高度受"按住跳跃键"影响（`JumpSustain` 松手即削减上升速度），
-这是游戏本身的变高跳设计，不是功能异常。
+## §1 目标程序与环境
 
-**③ 无限二段跳必须先开能力开关。** 游戏每帧执行
-`abilities.DoubleJump.SetStateActive(AllowDoubleJump)`，而
-`AllowDoubleJump` 要求 `PlayerAbilities.DoubleJump.HasAbility` 为真。
-若只写 `m_numberOfJumpsAvailable`，`SeinController.PerformJump` 根本不会
-进入二段跳分支（实测玩家初始 `HasAbility=0`，功能无效）。
-现实现: 激活时把该能力（1 字节 bool）置 1 并维持跳跃次数，关闭时还原原值。
-注意 `PlayerAbilities` 的字段偏移与源码声明顺序**不同**（mono 会重排：
-`DoubleJump` 实测 `+0x24`，`DoubleJumpUpgrade` `+0x54`），必须按元数据取值。
+| 项 | 终极版 | 原版 |
+|---|---|---|
+| 进程名 | `oriDE.exe` | `ori.exe` |
+| Unity | 5.3.2 | 5.0 |
+| 运行时 | mono（32 位 WoW64） | mono（32 位 WoW64） |
+| 托管程序集 | `<游戏目录>/OriDE_Data/Managed/Assembly-CSharp.dll` | 同结构 |
+| 混淆 | **无**（可反编译；目录里存在 3DM 汉化补丁） | 无 |
 
-**④ 能力点数用"不足才补满"，不能持续写。**
-`SeinLevel.LevelUp()` 会 `SkillPoints++`。若每周期强行写回固定值，就会与
-游戏自身结算反复互相覆盖，点数持续跳动并反复触发升级动画
-（`OnLevelUpGameObject`）。现在只在"被消耗（学技能）后低于目标"时补满。
+- 修改器本体是 **64 位** Go 程序，用 `ReadProcessMemory` 读 32 位目标。
+- 反编译：用 ILSpy 打开 `Assembly-CSharp.dll` 即可得到完整 C# 源码。本项目所有
+  "源码依据"均指该反编译结果。
 
-**⑤ 关于经验。** 游戏确实有经验: 击杀敌人累积经验，经验满即升级
-（`LevelUp()`），每级 **+1 能力点**并播放升级动画。由于能力点数可直接补满
-（功能④），"无限经验"与"经验倍率"既冗余、又会因反复升级带来动画刷屏，
-故一并移除。
+## §2 进程内存模型（关键前提）
 
-**⑥ 二段跳的两个使用注意。**
+**地址空间是 32 位 + `/LARGEADDRESSAWARE`**：托管堆横跨 `0x50xxxxxx`–`0x7Bxxxxxx`。
+实测观察到的地址带：
 
-- **需过了开场剧情（拿到精灵之火）后才生效。** 开局阶段游戏自身通过
-  `AllowDoubleJump` 的其它条件（`IsPlayingAnimation` 等）与能力限制区禁止二段跳，
-  与本功能无关；拿到第一个能力后即正常。
-- **关闭功能后会保留"普通二段跳"。** 原因是 `SeinNestedPrefab.IsInstantiated`
-  的 setter 在置 false 时会直接 `Destroy()` 能力组件；若关闭时把能力标志还原为 0，
-  组件被销毁，再次开启只写标志位无法重建，表现为"关掉再开就失效"。
-  因此实现选择**不还原能力标志**（首次开启即永久授予），关闭只停止维持无限次数。
-  如果你在开启状态下存档，该能力会留在存档里。
+| 地址带 | 内容 |
+|---|---|
+| `< 0x10000000` | mono 低区：静态数据 / 分配区 / JIT 代码（实测有 `MEM_PRIVATE + PAGE_EXECUTE_READWRITE` 段） |
+| `0x2A000000`–`0x2BFFFFFF` | mono 元数据：klass、类型名字符串、部分 vtable |
+| `0x50xxxxxx`–`0x53xxxxxx` | vtable / mono 运行时结构 |
+| `0x50xxxxxx`–`0x7Bxxxxxx` | **托管堆对象**（我们的目标） |
 
-**⑦ 界面刷新方式。** 程序进入终端的**备用屏幕缓冲区**（`ESC[?1049h`）、
-隐藏光标并关闭自动换行（`ESC[?25l` / `ESC[?7l`）。每帧做的是
-**重写整个窗口的每一行**：`ESC[H` 光标归位 → 逐行输出（不足处补空行）
-→ 每行末尾追加 `ESC[K` 清除该行光标之后的残留。
+要点：
 
-这一点很关键: 早先只写"有内容的行"再补一个 `ESC[J`，当内容变短时
-（关闭功能后描述文本变短、或从修改器界面退回选择界面）就会留下上一帧的
-字符，表现为**界面重叠/文字残留**。逐行重写 + `ESC[K` 从根本上避免了这个
-问题，也仍然不会滚动（最后一行不写换行）。退出时恢复终端状态。
-若窗口太矮，超出部分会被截断（而不是滚动）——请把窗口拉高一些。
+- **RPM 地址用零扩展**（`uint32 → uintptr`）。WoW64 目标的地址空间就是宿主 64 位
+  空间的低 4GB，零扩展即正确；符号扩展会指向未映射区。
+- 区域枚举（`ReadableRegions`）用 64 位视图的 `VirtualQueryEx`，再把
+  `BaseAddress` 掩码到低 32 位。
+- **任何 `0x?0000000` 之类的地址上限假设都极其危险**——见 §8-2。
 
-### 前台导航（无小键盘时使用）
+## §3 对象定位原理
 
-把焦点切到修改器窗口后：
+### 3.1 活体玩家（最重要）
 
-- **↑ / ↓**（或 W / S）：移动光标选择功能项
-- **回车 / 空格**：激活或取消当前选中的功能
-- 选中项以 `▶` 高亮显示
-
-两条触发路径互不干扰：界面按键只在修改器窗口有焦点时生效（读控制台输入
-事件），而小键盘功能热键始终全局可用——切回游戏后照样能开关功能。
-（实现见 `main.go` 的 `consoleKeys` 与 `uiKeys`。）
-
-冻结语义：
-- **功能 1-2（无限生命/能量）= 持续补满到上限**：每周期读取上限（生命取
-  `MaxHealth`、能量取 `Energy.Max`）并把当前值写满。即使激活时残血或空能量，
-  也会立即补满——符合"无限"的直觉语义（旧版捕获激活瞬间值，空能量时会被
-  锁死在 0，已修正）。生命按"球"显示（1 球 = 4 点）。
-- **超级跳 = 捕获激活瞬间的 6 个跳跃高度字段并放大**（关闭时全部还原）；
-- **能力点数 = 不足才补满**：低于目标才写，避免与游戏自身升级结算打架
-  （见上文"实机机制要点 ④"）；
-- **死亡数归零 = 固定目标值模式**：激活后无条件写 0，适合"无死亡通关"成就
-  （游戏判定 `SeinDeathCounter.Count == 0`，见 `AchievementsLogic.OnAct3End`）。
-
-### 小键盘 4：可在不安全区域建立灵魂链接
-
-原版游戏只允许在"安全区域"建立灵魂链接（存档点），不安全时按链接键会被拒绝并显示提示。
-
-**实现原理**（DE v1.0 反编译源码，`SeinSoulFlame`）：
+游戏里 `Characters` 是静态类，字段顺序：
 
 ```csharp
-// HandleCharging(): 蓄力只在"安全区域"判定通过时累加
-if (m_isCasting && ... && IsSafeToCastSoulFlame == Safe && ...)
-    m_holdDownTime += Time.deltaTime / HoldDownDuration;
-else
-    m_holdDownTime -= ...;                    // 不安全时回退
-
-// UpdateCharacterState(): 施放判定【不含任何安全检查】
-if (m_holdDownTime == 1f && IsOnGround && m_delayOnGround == 0f)
-    CastSoulFlame();
+public class Characters {
+    public static SeinCharacter Sein;   // ← 活体玩家
+    public static BabySein BabySein;
+    public static Naru Naru;
+    public static Character Current;    // ← 与 Sein 同一个对象
+    public static Ori Ori;
+}
 ```
 
-关键发现：`IsSafeToCastSoulFlame` 有 7 项判定（禁制区域／黑暗/存档台/附近敌人/
-重生点/无敌状态/地面射线检测），但它**只用于控制蓄力是否累加**；真正的施放入口
-`CastSoulFlame()` 不检查任何安全性。
+在内存里表现为 `[P, x, y, P, …]`：**同一个堆指针 P 出现在相隔 12 字节的两个槽位**
+（`Sein` 在 +0，`Current` 在 +0xC；中间两项在某些游戏状态下为 null）。
 
-因此本功能的做法：**当玩家按住链接键（且在地面、无落地延迟）时，直接把蓄力
-`m_holdDownTime` 写满 1.0f** —— 游戏下一帧便执行 `CastSoulFlame()`，
-在不安全区域成功建立链接。纯数据写入，不需要代码补丁，也不修改安全判定本身
-（关闭功能后游戏行为完全恢复原样）。
+定位算法（`resolver.go`）：
 
-**必须避开"轻点"窗口（否则技能树打不开）**：游戏用同一个按键区分两种操作
-（见 `SeinSoulFlame.UpdateCharacterState`）：
+1. 缓存槽位地址 `seinAnchor`，**每周期直接重读该槽**——角色重生时游戏会改写静态
+   字段，槽内容自动指向新对象。
+2. 槽失效（读不到 / 校验不过）时，扫低区（`< 0x10000000`）找 `[P, …, P]` 模式，
+   逐个用 `validateSein` 校验 + 类名回读确认。
+3. 仍失败则全地址空间兜底。
 
-| 操作 | 条件 | 效果 |
+`validateSein` 的判据（每一条都对应一次踩坑，别随意加严）：
+
+- 对象在堆带、`[0]` 是合法 vtable；
+- `Level(+0x38)` / `Energy(+0x3C)` / `Mortality(+0x40)` 都是堆指针；
+- `u32(Level+0x20) == 对象`（`SeinLevel.m_sein` 回指本体）；
+- 能量/生命的数值在合理范围——**只校验范围，不校验 `Current <= Max`**
+  （拾取瞬间或外部改写会出现 `Current > Max` 的暂态，加严会让解析器整体失效，见 §8-11）。
+
+### 3.2 玩家对象链（其余对象都从这里直读）
+
+```
+SeinCharacter
+  +0x10 -> SeinAbilities
+             +0x08 -> SeinDoubleJump
+             +0x0C -> SeinJump
+  +0x28 -> SeinSoulFlame
+  +0x38 -> SeinLevel        (+0x20 m_sein 回指)
+  +0x3C -> SeinEnergy
+  +0x40 -> SeinMortality
+             +0x0C -> SeinHealthController
+  +0x48 -> PlatformBehaviour
+  +0x4C -> PlayerAbilities  (每个能力: +偏移 -> CharacterAbility -> +0x08 HasAbility)
+```
+
+子对象会随场景/重生重建，因此**每次刷新都重读指针**。
+
+### 3.3 独立单例（低区槽扫描）
+
+`SeinDeathCounter` / `GameWorld` 等单例的做法：扫低区（`< 0x10000000`）中"值能
+解析成目标类名"的槽位，缓存槽地址并在每周期重读；槽失效则清空重扫（带指数退避）。
+
+**注意**：`GameWorld` 能定位；`DifficultyController` / `GameTimer` / `GameController`
+**定位不到**（见 §11）。
+
+## §4 mono 元数据读取（怎么查字段偏移）
+
+这是本项目最关键的"武器"：**不靠猜、不靠源码顺序，直接从运行中的进程读 mono 元数据**。
+
+### 4.1 对象与类的结构
+
+```
+对象:  [0] = vtable 指针        [4] = monitor
+vtable: [0] = klass 指针
+klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符串指针
+```
+
+判"这个指针是不是合法 klass"的三条：`klass` 在合法指针范围、`u32(klass)==klass`
+（自指）、`klass+0x30` 指向可读的标识符字符串。
+
+⚠ **名字符串不保证 4 字节对齐**（实测 `SeinDeathCounter` 的名字在 `0x2AFB8F4D`）。
+对字符串指针做对齐校验会导致**所有类名解析静默失败**——见 §8-3。
+
+### 4.2 字段描述符
+
+在元数据区搜索"值等于类型名字符串地址"的 dword（即字段描述符的 name 指针），
+该描述符：
+
+```
++0x00 = 字段名字符串指针
++0x04 = 声明该字段的 klass
++0x08 = 字段在对象内的偏移     ← 我们要的
+```
+
+`probe offs <类名> <字段名...>` 就是这个逻辑 + 按声明类过滤。
+
+⚠⚠ **元数据偏移 ≠ 源码字段声明顺序**：mono 会重排。实测例子：
+`PlayerAbilities.DoubleJump` 按声明顺序推算是 `+0x18`，**实际是 `+0x24`**；
+`DoubleJumpUpgrade` 推算 `+0x48`，实际 `+0x54`。**必须查元数据，不要推算。**
+
+## §5 字段偏移总表（终极版，均已由元数据+活体内存双重核验）
+
+### SeinCharacter 及其直接子对象
+
+| 类 | 字段 | 偏移 | 说明 |
+|---|---|---|---|
+| SeinCharacter | Abilities | 0x10 | → SeinAbilities |
+| SeinCharacter | Controller | 0x18 | |
+| SeinCharacter | Input | 0x34 | |
+| SeinCharacter | SoulFlame | 0x28 | → SeinSoulFlame |
+| SeinCharacter | Level | 0x38 | → SeinLevel |
+| SeinCharacter | Energy | 0x3C | → SeinEnergy |
+| SeinCharacter | Mortality | 0x40 | → SeinMortality |
+| SeinCharacter | PlatformBehaviour | 0x48 | |
+| SeinCharacter | PlayerAbilities | 0x4C | → PlayerAbilities |
+| SeinAbilities | DoubleJump | 0x08 | → SeinDoubleJump |
+| SeinAbilities | Jump | 0x0C | → SeinJump |
+
+### 数值字段
+
+| 类 | 字段 | 偏移 | 类型 | 说明 |
+|---|---|---|---|---|
+| SeinLevel | m_sein | 0x20 | ptr | 回指本体（校验用） |
+| SeinLevel | SkillPoints | 0x24 | int | 可用能力点 |
+| SeinLevel | Experience | 0x2C | int | 经验 |
+| SeinEnergy | MinVisual | 0x18 | float | |
+| SeinEnergy | MaxVisual | 0x1C | float | |
+| SeinEnergy | Current | 0x20 | float | 当前能量 |
+| SeinEnergy | Max | 0x24 | float | **能量上限 = 能量球数** |
+| SeinMortality | Health | 0x0C | ptr | → SeinHealthController |
+| SeinHealthController | Amount | 0x1C | float | 当前生命（**点数，1 球 = 4 点**） |
+| SeinHealthController | MaxHealth | 0x20 | int | 生命上限（点数） |
+| SeinHealthController | VisualMinAmount | 0x24 | float | 界面插值 |
+| SeinHealthController | VisualMaxAmount | 0x28 | float | 界面插值 |
+| SeinDeathCounter | m_deathCounter | 0x14 | int | 死亡次数 |
+| DifficultyController | Difficulty | 0x18 | int | 0=Easy 1=Normal 2=Hard 3=OneLife（**可写**） |
+| DifficultyController | LowestDifficulty | 0x1C | int | **⛔ 只读！成就资格唯一依据** |
+| DifficultyController | OnDifficultyChanged | 0x20 | ptr | |
+| GameWorld | RuntimeAreas | 0x18 | ptr | → List\<RuntimeGameWorldArea\> |
+| RuntimeGameWorldArea | m_completionAmount | 0x14 | float | 区域完成度 0..1 |
+| RuntimeGameWorldArea | m_dirtyCompletionAmount | 0x18 | bool | 置 0 防重算 |
+| List\<T\> | _items | 0x08 | ptr | 元素数组 |
+| List\<T\> | _size | 0x0C | int | 元素个数 |
+
+### SeinSoulFlame
+
+| 字段 | 偏移 | 说明 |
 |---|---|---|
-| 轻点 | 按下后 0.3 秒内松开（`m_tapRemainingTime > 0`）| 打开技能树 |
-| 长按 | 超过 0.3 秒（`m_tapRemainingTime` 归零）| 就地建立灵魂链接 |
+| m_numberOfSoulFlamesCast | 0x90 | |
+| m_holdDownTime | 0x94 | 蓄力；写满 1.0 = 可施放 |
+| m_tapRemainingTime | 0xB8 | **>0 表示仍在"轻点"窗口**（松开 → 打开技能树） |
+| m_isCasting | 0xBC | 玩家按住链接键 |
+| m_delayOnGround | 0xC0 | 落地延迟，>0 不可施放 |
+| LockSoulFlame | 0xA4 | |
+| CooldownDuration | 0xA8 | |
+| m_cooldownRemaining | 0xB0 | 归零 = 无冷却 |
 
-若在轻点窗口内就把 `m_holdDownTime` 写满，游戏会把这次按键当成"长按"，
-轻点路径失效——表现就是**建立链接后进不去技能界面**。因此实现中会先读
-`m_tapRemainingTime`（偏移 0xB8），>0 时完全不干预，等它归零（确认是长按）
-才写满蓄力。这样安全区域内的轻点/长按语义与游戏原生完全一致。
+### SeinJump（跳跃高度全在 SeinJump 上，**不是一个变量**）
 
-**使用提示**：先把链接技能（Rekindle）学会，然后在任意位置按住链接键即可；
-若同时开启小键盘 3（无需冷却），可连续建立链接。
+| 字段 | 偏移 | 用在哪 |
+|---|---|---|
+| BackflipJumpHeight | 0x54 | 转身后空翻 |
+| CrouchJumpHeight | 0x58 | 蹲跳 |
+| FirstJumpHeight | 0x60 | 移动跳/站立跳 轮换第 1 段 |
+| JumpIdleHeight | 0x64 | 备用高度 |
+| JumpImpulse | 0x68 | 起跳冲量（**当前未被任何功能修改**） |
+| SecondJumpHeight | 0x70 | 轮换第 2 段 |
+| ThirdJumpHeight | 0x74 | 轮换第 3 段 / 贴墙跳 |
 
-### Ctrl+小键盘 1：一命保护（终极版专用）—— 当前未能生效
+### SeinDoubleJump
 
-预期行为：让"一命通关"难度下的死亡行为与普通模式一致——**在上个检查点复活、
-存档不被销毁**，同时保留一命通关成就的获取资格。
+| 字段 | 偏移 | 说明 |
+|---|---|---|
+| JumpStrength | 0x38 | 二段跳强度 |
+| m_doubleJumpTime | 0x3C | |
+| m_numberOfJumpsAvailable | 0x40 | 剩余跳跃次数（int） |
+| m_remainingLockTime | 0x44 | |
 
-原理（基于 DE v1.0 反编译源码）：
+### PlayerAbilities
 
-| 源码位置 | 逻辑 |
+- 能力字段全部是 `CharacterAbility` 引用（连续 `0x14`..`0xB0`，共 40 项）；
+  `CharacterAbility` 内 `HasAbility` 在 **+0x08，1 字节 bool**。
+- **基础能力（暂停界面 11 项）** ← 修改器"解锁全部基础技能"只给这些：
+
+| 偏移 | 字段 | 中文 |
+|---|---|---|
+| 0x14 | Bash | 猛击 |
+| 0x18 | ChargeFlame | 充能烈焰 |
+| 0x1C | WallJump | 飞檐走壁 |
+| 0x20 | Stomp | 践踏攻击 |
+| 0x24 | DoubleJump | 二段跳 |
+| 0x28 | ChargeJump | 充能跳跃 |
+| 0x34 | Climb | 攀爬 |
+| 0x38 | Glide | 黑子之羽 |
+| 0x3C | SpiritFlame | 精灵之火 |
+| 0xA8 | Grenade | 光芒爆裂 |
+| 0xAC | Dash | 冲刺 |
+
+- 其余为**技能树被动 / 升级**（RapidFire、WaterBreath、Sense、StompUpgrade、
+  DoubleJumpUpgrade、BashBuff、UltraDefense、各 \*Efficiency、Rekindle、Regroup、
+  MapMarkers、HealthMarkers、EnergyMarkers、AbilityMarkers 等），
+  **修改器一律不给**，由玩家用"无限能力点数"自己去技能树买。
+- **独立第三方交叉验证**：删掉的旧表 `attach_3943.ct` 里的 AA 脚本按
+  `[esi+3C]/+1C/+18/+24/+14/+20/+38/+34/+28` 读取能力，与我们核验的偏移
+  **完全一致**（Bash+14 … SpiritFlame+3C）。
+
+## §6 逐功能实现（写什么、为什么）
+
+| 功能 | 写入字段 | 关键点 |
+|---|---|---|
+| 无限生命 | `health+1C = health+20`（Amount ← MaxHealth） | 每周期写；上限为 0 时提示 |
+| 无限能量 | `energy+20 = energy+24` | 同上 |
+| 灵魂链接无需冷却 | `soulflame+B0 = 0` | |
+| 不安全区域建链接 | 长按确认后 `soulflame+94 = 1.0` | **必须先检查 `m_tapRemainingTime(+B8) <= 0`**，否则轻点开技能树失效（§8-16） |
+| 超级跳 | 同时放大 6 个高度字段（0x54/0x58/0x60/0x64/0x70/0x74），关闭还原 | 只放大一个会出现"有的跳得高有的照旧"（§8-17） |
+| 无限二段跳 | `playerab+24 → +8 = 1`（能力开关）+ `doublejump+40 = 999` | 只写次数不够（§8-14）；**关闭时不还原能力开关**（§8-15） |
+| 无限能力点数 | `level+24`，`< 99` 才写 | 持续写会与升级结算打架（§8-13） |
+| 死亡数归零 | `death+14 = 0` | |
+| 100% 探索 | 遍历 `gw+18` 列表，每个区域 `+14 = 1.0`、`+18 = 0` | 只能解锁"完成地图"成就，不是"找齐秘密"（§7-6） |
+| 解锁全部基础技能 | 上表 11 个 `[playerab+偏移]+8 = 1` | 只写 1 字节；组件实例化见 §7-4 |
+| 一命保护 | `diffc+18 = 1` | ⚠ 目标对象定位不到，未生效（§11） |
+
+所有执行器一律通过 `Runtime.Addrs()` / `SubAddr()` 取地址（内部加锁）——
+**不要直接读 Runtime 字段**，后台刷新会并发改写（§8-6）。
+
+## §7 游戏内部机制事实（改功能前必读）
+
+1. **生命单位是"点"，不是"球"**：`HealthUpgradesCollected => MaxHealth/4 - 3`，
+   即 **1 个生命球 = 4 点**。初始 3 球在内存里是 `12`。UI 显示要除以 4。
+2. **能力分两类但同一类型**：基础能力与技能树被动都是 `CharacterAbility`，
+   无法靠类型区分，**只能按字段清单区分**。
+3. **二段跳的门槛**：游戏每帧执行 `DoubleJump.SetStateActive(AllowDoubleJump)`，
+   而 `AllowDoubleJump` 要求 `PlayerAbilities.DoubleJump.HasAbility`；
+   否则 `SeinController.PerformJump` 根本不进二段跳分支。
+4. **能力组件的实例化**：`SeinNestedPrefab.IsInstantiated` 的 setter 在置 false 时
+   会 `Destroy()` 组件；游戏只在"正规授予能力"时（`PlayerAbilities.SetAbility` →
+   `Prefabs.EnsureRightPrefabsAreThereForAbilities`）实例化。因此**直接写标志位后，
+   少数能力（滑翔/冲刺/猛击等非默认实例化的）可能要等存档重载或场景切换才实体化**。
+   默认实例化的有：Carry/Crouch/Fall/Jump/PushAgainstWall/Run/Idle/StandingOnEdge/
+   Swimming/SoulFlame/GrabPushPull/SpiritFlame/PickupProcessor。
+5. **跳跃高度不是单一变量**：`SeinJump.PerformJump()` 会分支——移动跳/站立跳
+   **轮换** First→Second→Third；贴墙跳用 First；蹲跳用 Crouch；后空翻用 Backflip。
+   另外长按跳跃键会持续上升（`JumpSustain`），轻按自然跳得低，这是游戏本身的设计。
+6. **成就机制**（改功能前务必知道）：
+   - 睡眠总闸：`AchievementsController.AwardAchievement` 被
+     `!CheatsHandler.DebugWasEnabled` 拦着——**一旦游戏内调试菜单被启用过，
+     之后所有成就都不会解锁**。
+   - "完成地图"（`CompleteMapAchievementAsset`）：每 5 秒采样一次
+     `GameWorld.CompletionAmount ≈ 1`。**我们的"100% 探索"改的就是这个值，
+     所以能解锁它。**
+   - "翻遍每一寸土地 / 找齐秘密"（`FindAllSecretsAchievementAsset`）：只在
+     `AchievementsLogic.RevealTransparentWall()` 里发放，计数到 **45 面半透明隐藏墙**
+     才给。**与地图百分比、与收集品都无关——100% 探索给不了它**，必须自己去穿墙。
+   - 二段跳等"控制"作弊会影响成就资格的路子是 `CheatsHandler`，
+     而技能树被动的 `HasAbility` 标志不属于该机制。
+7. **一命难度的清档链路**：`SeinDamageReciever` 依据
+   `DifficultyController.Instance.Difficulty == OneLife` 置 `WasKilled`；
+   之后 `currentSaveSlot.Difficulty == OneLife && WasKilled` → 清档。
+   成就只读 `LowestDifficulty`（所以保护方案是锁 `Difficulty`、**绝不碰
+   `LowestDifficulty`**）。
+8. **灵魂链接的两种操作**（同一按键）：轻点（0.3 秒内松开，
+   `m_tapRemainingTime > 0`）→ 打开技能树；长按 → 就地建立链接。
+   任何在轻点窗口内的蓄力写入都会破坏"轻点"语义。
+9. **能力点与升级**：`SeinLevel.LevelUp()` 会 `SkillPoints++` 并实例化
+   `OnLevelUpGameObject`（升级特效）。持续写回固定点数会与它循环打架。
+10. **游玩时间**：`GameTimer.CurrentTime`（float 秒），挂在 `GameController.Timer`；
+    当前两个对象都定位不到（§11）。
+11. **探索度**：`GameWorld.CompletionAmount` 是**派生值**（各
+    `RuntimeGameWorldArea.m_completionAmount` 的平均），底层数据是"已访问地图面
+    + 已发现图标"（`UpdateCompletionAmount`：`(visitedFaces + found) /
+    (faceCount + total)`）。直接写 `m_completionAmount` 是改派生值，
+    所以要清 `m_dirtyCompletionAmount` 并持续维持。
+
+## §8 踩坑清单（现象 → 根因 → 修法）
+
+> 这一节是本项目最贵的资产。改功能前扫一眼，能省下大量时间。
+
+1. **所有功能写入后毫无效果**
+   → 定位到了"传送门克隆体"（`CloneOfSeinForPortals` 的副本 Sein）：结构完整、
+   内存合法，但游戏从不使用（**静态引用为零**）。
+   → 修：改扫游戏静态字段形成的 `[P,0,0,P]` 模式，并用"低区有引用"作为活体判据。
+
+2. **"一开始能用，死亡重生后彻底失效 / 永远扫描中"**
+   → 32 位进程带 `/LARGEADDRESSAWARE`，托管堆到 `0x7Bxxxxxx`；旧代码把"堆指针"
+   上界写成 `0x70000000`，**重生后分配到 `0x73xxxxxx` 的对象被一律过滤**。
+   → 修：地址范围放宽到完整 32 位用户空间（`maxUserAddr = 0xFFFF0000`）。
+
+3. **类名单例（死亡计数/难度）永远定位不到**
+   → mono 类型名字符串是紧凑拼接的，**不保证 4 字节对齐**；旧代码对字符串指针做了
+   `&3==0` 校验，导致所有类名解析静默失败。
+   → 修：字符串指针用独立的 `isTextPtr`（不校验对齐）。
+
+4. **"用着用着突然失效"**
+   → 旧代码缓存**对象地址**，只在结构校验失败时才重扫；角色重生后旧对象在被 GC 前
+   内存依旧"看起来合法"，于是继续写一个没用的对象。
+   → 修：缓存**静态槽地址**，每周期重读槽内容。
+
+5. **游戏里按 ESC 导致修改器退回选择界面、再按一次直接退出**
+   → 界面按键曾是"全局响应"。
+   → 修：界面按键改读**控制台输入缓冲**（`CONIN$` + `ReadConsoleInputW`）——
+   系统只往拥有键盘焦点的控制台投递输入事件，所以"仅本窗口前台才响应"是机制上的
+   天然保证，不再依赖窗口标题/父进程链等启发式。
+
+6. **反复切换会话时修改器偶发静默退出**
+   → `BuildFeatures` 重建全局执行器列表时，上一会话的引擎协程仍在遍历同一切片，
+   并发读写切片头会 panic 并终止进程。
+   → 修：`tickersMu` 保护 + 后台协程 panic 兜底。**执行器/取址也不要绕过锁。**
+
+7. **界面卡死（无响应）**
+   → `ReadConsoleInputW` 在输入缓冲为空时会**阻塞**；主循环每帧调用它就卡住了。
+   → 修：先 `GetNumberOfConsoleInputEvents` 查事件数，为 0 直接返回。
+
+8. **鼠标拖选窗口后界面冻结**
+   → 保留 QuickEdit 时，拖选文本会让后续 `WriteConsole` 阻塞，而本程序持续重绘。
+   → 修：输入模式里不启用 QuickEdit。
+
+9. **界面残留 / 两块 UI 重叠**
+   → 只重写"有内容的行"再补 `ESC[J`，内容变短时上一帧字符残留。
+   → 修：每帧**重写整屏每一行**（不足补空行）+ 每行追加 `ESC[K`；配合备用屏幕缓冲区
+   （`ESC[?1049h`）与关闭自动换行（`ESC[?7l`），既不滚动也不残留。
+
+10. **键位撞车（发生过两次）**
+    → 功能表有 `NewFeature`（小键盘）/ `NewCtrlFeature`（Ctrl）/ `NewCtrlShiftFeature`
+    （Ctrl+Shift）三种构造器；把用错构造器的功能放到别的档位，就会与同数字的功能
+    同时触发（曾出现"无限二段跳"与"无限生命"、"无限能力点数"与"无限能量"）。
+    → 修：用对构造器；**每次改完键位跑 `probe feats`**，它会打印键位表并自动检测重复。
+
+11. **解析器突然整体定位失败（连活体玩家都找不到）**
+    → `validateSein` 曾要求 `Energy.Current <= Max`；外部改写或拾取暂态会让这个关系
+    短暂不成立，于是**把真正的玩家对象也拒掉了**。
+    → 修：只校验数值在合理范围（非 NaN、0..10000），不做字段间关系校验。
+
+12. **修改器显示 12 血，游戏里只有 3 血**
+    → 生命以"点"存储，1 球 = 4 点。
+    → 修：UI 按球显示（`HealthPointsPerCell`）。
+
+13. **能力点数一直涨、升级动画刷屏**
+    → 游戏 `LevelUp()` 会 `SkillPoints++` 并播特效；每周期强行写回固定值会与它
+    循环互相覆盖。
+    → 修：改成"不足才补满"（低于目标才写）。
+
+14. **无限二段跳完全无效**
+    → 只写 `m_numberOfJumpsAvailable` 不够，`AllowDoubleJump` 还要求
+    `PlayerAbilities.DoubleJump.HasAbility`（见 §7-3）。
+    → 修：同时把能力开关置 1。
+
+15. **二段跳"关掉再打开就失效"**
+    → `SeinNestedPrefab.IsInstantiated` 置 false 会 `Destroy()` 组件；关闭功能时还原
+    `HasAbility=0` 会把组件销毁，再开只写标志位无法重建。
+    → 修：**关闭时不还原该能力开关**（首次开启即永久授予，副作用已记录）。
+
+16. **建立灵魂链接后进不去技能界面**
+    → 功能 4 靠写满 `m_holdDownTime` 实现，在"轻点"窗口内也写，游戏于是把轻点当成
+    长按，技能树路径失效（§7-8）。
+    → 修：先读 `m_tapRemainingTime`，`> 0` 时完全不干预。
+
+17. **超级跳"每两三次才有一次跳得高"**
+    → 跳跃高度分 6 个字段且会轮换，只放大 `FirstJumpHeight` 只能命中一部分（§7-5）。
+    → 修：同时放大 6 个字段（0x54/0x58/0x60/0x64/0x70/0x74）。
+
+18. **修改器进程偶发因内存耗尽退出**
+    → 早期扫描按"整段区域"一次性 `make([]byte, 区域大小)`，堆变大后可能申请数百 MB。
+    → 修：一律 4MB 分块读取。
+
+19. **误以为锚点会"变成垃圾数据"**
+    → 曾把指针字节 `20 34 6E 73`（= `0x736E3420`）读成文本 `" 4ns"`，据此
+    错判"锚点失效"。实际锚点一直有效，只是高地址值被 §8-2 的上限过滤掉了。
+    → 教训：**看到"可疑数据"先按 dword 解读，别按文本解读**；并把范围/对齐假设
+    当作首要怀疑对象。
+
+## §9 诊断工具 `probe`（等价 CE 的核心能力）
+
+全部命令都可加 `-vanilla` 切换到原版进程（`ori.exe`）。常用：
+
+| 命令 | 用途 |
 |---|---|
-| `SeinDamageReciever.OnKill` | `if (Difficulty == OneLife) { WasKilled=true; 存盘; 删光所有备份 }` |
-| `SeinDamageReciever.OnKillRoutine` | `if (Difficulty == OneLife) 弹 GameOver` else `淡出 → RestoreCheckpoint()` 复活 |
-| `AchievementsLogic.OnAct3End` | `switch (LowestDifficulty) { case OneLife: 授予成就 }` |
+| `diag [-wait]` | 跑真实解析器，打印定位结果与快照（**验证解析器最快的入口**） |
+| `bases [-xml]` | 打印所有基址符号；`-xml` 直接输出 CE 表的 `<UserdefinedSymbols>` 块 |
+| `feats` | 打印功能/键位表并**自动检测键位重复** |
+| `feat <数字> [秒] [-ctrl] [-shift]` | 对活体进程运行**真实功能**并打印状态（`-ctrl`/`-shift` 对应档位） |
+| `offs <类名> <字段名...>` | **权威字段偏移**（从 mono 元数据读，等价 CE mono dissect） |
+| `heapfind <类名>` | 在堆区按类名枚举实例（确认某单例是否存在） |
+| `singleton <类名>` | 在低区找"指向该类实例的静态槽"（单例定位） |
+| `struct <地址> [字数]` | 转储对象字段并标注指针目标类名 |
+| `read/write <地址> <类型> <值>` | 原始读写（类型支持 i8/i16/i32/u32/f32/f64） |
+| `fields2 <类名>` | 遍历 klass 的字段数组直出（备用） |
+| `findfield <类名> <字段名...>` | 另一条字段查找路径 |
+| `live` / `findall <类名>` / `refs <地址>` / `allrefs <地址>` | 活体定位 / 枚举实例 / 查引用 |
+| `corereg [地址...]` | 打印修改器实际枚举到的内存段并查询某地址是否被覆盖 |
+| `racetest` | 复现"会话切换 + 引擎并发"时序，配合 `-race` 用 |
+| `conin` | **确定性自测控制台输入通路**（注入合成按键再读回，无需人工按键） |
+| `staticblock` / `diffobj` / `diffname` / `diffstrict` / `onescan` / `staticmap` / `staticref` | 各类定位探索工具，详见源码注释 |
 
-一命清档与 GameOver 都只认 `Difficulty`，而成就只认 `LowestDifficulty`。
-本功能因此**每秒 20 次把 `Difficulty` 锁为 Normal(1)，绝不触碰 `LowestDifficulty`(保持 OneLife=3)**。
+自测样例（不需要游戏也能跑）：
 
-**当前状态：未能生效（卡在定位）。** 实机反馈"开启后仍从头上开始、状态一直显示
-等待定位难度控制器"。核查结论：
+```
+probe conin     → 注入 VK 0x41 读回识别 + 空缓冲不阻塞
+probe feats     → 键位表 + "无重复 ✓"
+```
 
-- 定位器已升级为"静态槽缓存 + 每周期重读"，且修掉了此前的类名解析 bug
-  （mono 名字符串不保证 4 字节对齐）与地址范围上限；
-- 但在活体进程上做**全堆无过滤扫描**（`probe diffname`）只找到几个孤立/垃圾对象，
-  其中唯一合法实例 `0x52BA8A68` 的 `Difficulty/Lowest` 均为 0、委托为空，且
-  `probe allrefs` 显示它**全内存零引用**——即当前内存中不存在可用的
-  `DifficultyController` 实例（`Instance` 静态字段没有指向它）。
-- 补充线索：存档清空实际由 `currentSaveSlot.Difficulty == OneLife &&
-  currentSaveSlot.WasKilled` 触发（`SaveWasOneLifeAndKilled`），
-  而 `WasKilled` 在 `SeinDamageReciever` 中依据
-  `DifficultyController.Instance.Difficulty` 设置。
+## §10 维护流程（改功能时的 checklist）
 
-因此该功能要么需要在游戏实际处于关卡内时重新定位（`Instance` 可能随场景加载才创建），
-要么改走"存档槽数据"这条路（改 `WasKilled` / 该槽的 `Difficulty`）。**暂不可用，
-请勿依赖**。临时替代：开启小键盘 1（无限生命）后角色不会死亡，一命清档自然也不会触发。
+1. **先从源码确认机制**：ILSpy 打开 `Assembly-CSharp.dll`，找到对应类/方法，
+   看清"游戏到底读/写哪个字段、有哪些前置条件"。
+2. **用元数据确认偏移**：`probe offs <类> <字段>`（**不要按源码顺序推算**）。
+   新偏移写进 `ori/offsets.go`（唯一维护点），并把来源/用途写进注释。
+3. **实现执行器**：在 `features.go` 里按语义选执行器，注意
+   - 取址一律走 `Runtime.Addrs()/SubAddr()`（加锁）；
+   - 需要还原的用 `OnDeactivate` 并在 `DeactivateFeature` 的 switch 里登记；
+   - 幂等/一次性动作用"开启期间维持、关闭不动"。
+4. **构建**：`cd GoTrainer && go build ./... && go vet ./...`
+5. **键位自检**：`probe feats`（确认无重复、档位正确）。
+6. **实机验证**：`probe feat <数字> [秒] [-ctrl|-shift]`，看状态与目标内存值；
+   **写入型功能要验证"改回去/还原"也确实生效**。
+7. **同步文档**：
+   - README：§5 偏移表、§6 功能表、§7 机制、§8 新踩的坑；
+   - `ctables/ori_de.ct`：新增/修改对应记录（字段名与偏移与 `offsets.go` 一致）；
+     换会话后表可用 `probe bases -xml` 一键更新基址符号；
+   - 原版相关改动若未实测，**必须在 `ori_vanilla.ct` 里标注"未核验"**。
+8. **提交**：说明"现象→根因→修法"，便于回溯。
 
-**已知副作用**（若日后恢复可用）：存档列表的难度标签可能显示为"普通"，
-但成就判定读 `LowestDifficulty`，不受影响。
+键位分配规则：**优先小键盘 1-9/0；放不下的接 Ctrl+小键盘 1..N；特殊能力用
+Ctrl+Shift+小键盘**。每档内顺序编号、不留空位。
 
-## 地址方案（重要：为什么不用 CE 表 / FLiNG 提取）
+## §11 未解决 / 待办
 
-按优先级实测过三条路线：
+**重置时间** 与 **一命保护** 都卡在同一个问题上：目标对象定位不到。
 
-1. **FLiNG DE 修改器提取**（✗ 不可行）：exe 内无明文 `oriDE.exe+XXXX`
-   符号引用（0 处），AOB 串均为二进制噪声，无法提取。
-2. **网上现成 CE 表**（△ 价值低）：fearlessrevolution 的 DE 表
-   （`ctables/de_frf_62130.ct`）仅含 1 个 AOB 石头数量脚本，无指针结构。
-3. **CE mono dissect 按类名考古**（✓ 采用）：终极版与原版的类结构
-   **字段偏移完全一致**（SeinLevel.m_sein/SkillPoints/Experience = 0x20/0x24/0x2C 等），
-   运行期用**全堆两阶段扫描**定位活体对象，两版共用一套扫描代码：
-   - `SeinLevel` 回指签名 `u32(X+0x20)=P && u32(P+0x38)==X`
-     + Energy.Max∈[1,50] + Health.MaxHealth∈[12,400] 加固（排除克隆/副本）；
-   - `SeinDeathCounter` 稳定魔数 `u32(X+8)==0xFFFF18A6`。
+- 时间载体：`GameTimer.CurrentTime`（float 秒），挂在 `GameController.Timer` 上。
+- 一命保护载体：`DifficultyController`。
+- 现状：`GameController` / `GameTimer` / `DifficultyController` 在运行中的进程里
+  **都找不到活体实例**——全堆无过滤扫描（`probe heapfind`）只找到过若干
+  `DifficultyController` 名字的孤立/垃圾对象（`probe allrefs` 显示**全内存零引用**），
+  说明 `Instance` 静态字段并没有指向一个可定位的实例。
+- **已找到的可行线索**：
+  `SaveSceneManager`（**可以定位**，低区静态槽）持有 `List<SaveId> SaveData`(+0x10)，
+  每项的 `SaveObject` 就是**游戏全部可存档对象**——`GameTimer` /
+  `DifficultyController` / `GameController` 应该都在其中。顺着这个列表枚举并回读
+  类名，即可取出它们，从而一次解决两个功能。
+  相关源码：`SaveSceneManager.SaveData`、`SaveId.Id/SaveObject`。
 
-CE 的类静态槽地址（mono.dll+XXXX）位于 MonoDataCollector 注入层，
-外部读取为 MEM_FREE，不可固化——这是 CE 表指针写法对外部训练器的死路。
+**原版（ori.exe）**：字段偏移全部未核验，功能未实测。核验路径见 `ori_vanilla.ct`
+的注释（`probe offs ... -vanilla`）。
 
-**WoW64 关键坑**（两版通用）：DE 的 mono 大堆位于 64 位地址空间高位
-（如 SeinLevel@0x800265C0），32 位视角的 VirtualQueryEx 看不到；
-本程序为 64 位进程，用 64 位 VQEx 视图枚举（见 `core/memory.go` ReadableRegions）。
+**探针/脚本的小限制**：`probe` 的部分命令（`singleton`/`diffobj` 等）是围绕终极版
+观察写的，用于原版前应先跑 `diag -vanilla` 确认定位链路可用。
 
-字段偏移与扫描签名集中在 `ori/offsets.go`（唯一维护点）。
-两版数值验证记录：原版 死亡333/GameTime≈05:11/SP=1/Exp=1187；
-终极版 SP=13/Exp=405/能量1.0/2.0/血16/16/死亡98。
+## §12 资料与来源
+
+- **反编译**：`<游戏目录>/OriDE_Data/Managed/Assembly-CSharp.dll`（无混淆），
+  用 ILSpy 反编译。本 README 中所有"源码依据"均出自它。
+- **第三方 CE 表**（用于交叉验证，原始文件已按"只保留两张表"的要求删除，
+  可在 git 历史 `2e91d8c`（初始提交）找回）：
+  - `attach_3834.ct`：**原版**指针链（`"ori.exe"+00A36164` 死亡数、
+    `"mono.dll"+001F42C4` 能力点/灵魂点）——已转录进 `ori_vanilla.ct`。
+  - `attach_3943.ct`：能力标志读取脚本（偏移与我们核验的 11 项基础能力**完全一致**）
+    + 生命/能量 AOB 脚本——要点已记录在 §5 / `ori_vanilla.ct`。
+  - `attach_12228.ct`：CE v27 mono 表（`usemono()` + `define`），478 项，
+    含 SeinCharacter/Abilities/Jump 全字段，可作将来核验原版/写 AOB 的参考。
+- **本项目的教训来源**：全部为本项目实测（见 §8）。
+
+---
+
+# 三、构建 / 目录 / 边界
 
 ## 构建
 
 ```bash
-cd GoTrainer && go build -o GoTrainer.exe .
+cd GoTrainer
+go build -o GoTrainer.exe .      # 修改器本体（Windows 控制台 TUI）
+go build -o probe.exe ./cmd/probe  # 诊断工具
+go vet ./... && gofmt -l .        # 提交前检查
 ```
 
 ## 目录
 
 ```
 GoTrainer/
-  main.go            版本选择 + TUI + 热键轮询 + 会话协程
-  core/memory.go     进程读写 / 64位区域枚举 / 指针链（32 位指针）
-  ori/offsets.go     ★ 地址常量（唯一维护点，两版通用）
-  ori/resolver.go    堆扫描定位活体对象（两版共用）
-  ori/features.go    冻结型功能
-ctables/             CE 表与 mono 探针存档（研究记录，含 DE 考古）
+  main.go              TUI + 按键 + 会话协程
+  core/memory.go       进程/内存/控制台输入
+  ori/resolver.go      对象定位
+  ori/features.go      功能与执行器
+  ori/offsets.go       ★ 唯一地址维护点
+  cmd/probe/main.go    诊断工具
+ctables/
+  ori_de.ct            终极版字段对照表（与修改器同步）
+  ori_vanilla.ct       原版表（偏移未核验，含第三方原版指针链）
 ```
 
 ## 已知边界
 
-- 游戏失焦/暂停时堆扫描仍可用；场景切换可能重建对象，2 秒校验失败自动重扫。
-- 终极版打过 3DM 汉化补丁的构建已验证兼容（本机实测）。
-- 原版修改器的 FLiNG DE exe 已从本项目移除（原计划捆绑启动，被原生实现取代）；
-  C#/WinForms 旧版已删除（git 历史可查）。
+- 仅支持 32 位 mono 目标；地址策略与 WoW64 零扩展绑定。
+- 需要管理员权限（`OpenProcess` 读写目标内存）。
+- 原版未验证（见 §11）。
+- 成就相关：若游戏内调试菜单被启用过（`CheatsHandler.DebugWasEnabled`），
+  **任何修改器操作都不会影响成就**（因为游戏自己就不再发放）。

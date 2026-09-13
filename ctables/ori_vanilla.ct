@@ -1,0 +1,276 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  OriTrainer — 原版（Ori and the Blind Forest, ori.exe）字段对照表
+  =================================================================
+  ⚠⚠ 状态：**本表尚未实机核验**（我们的逆向工作全部在终极版完成）。
+
+  本表与修改器的功能列表保持同步（功能名、字段名一致），但：
+
+    1. 所有「符号+偏移」字段的**偏移值都是从终极版抄来的**，原版是否相同
+       **未知**。原版是另一个 build（Unity 5.0，Assembly-CSharp.dll 不同），
+       mono 的字段重排结果可能不同 —— 必须重新核验。
+    2. 核验方法（先启动原版并进入存档）：
+           cd GoTrainer
+           go run ./cmd/probe offs SeinCharacter Level Energy Mortality -vanilla
+           go run ./cmd/probe offs SeinLevel SkillPoints -vanilla
+           ... 逐个类核验后，把本文件的偏移改掉
+       命令加 `-vanilla` 即附加到 ori.exe。
+    3. 下方的「第三方原版指针链」来自网络 CE 表（明确引用 "ori.exe"），
+       是**可直接使用**的参考数据，但同样未由我们独立验证。
+
+  定位方法（与终极版相同，待核验）：游戏静态字段 Characters.Sein 与
+  Characters.Current 在低地址区形成 [P,0,0,P] 相邻双引用；扫到后按对象链取值。
+  详见 README「维护手册」。
+-->
+<CheatTable CheatEngineTableVersion="18">
+  <CheatEntries>
+
+    <CheatEntry>
+      <ID>2000</ID>
+      <Description>"★ 必读：原版字段偏移全部未核验（抄自终极版）；核验方法见 README 维护手册"</Description>
+      <LastState/>
+      <Color>FF0000</Color>
+      <GroupHeader>1</GroupHeader>
+      <CheatEntries>
+        <CheatEntry>
+          <ID>2001</ID>
+          <Description>"核验命令: probe offs &lt;类名&gt; &lt;字段名...&gt; -vanilla （原版进程 ori.exe）"</Description>
+          <LastState/>
+          <Color>FF8000</Color>
+          <GroupHeader>1</GroupHeader>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>2002</ID>
+          <Description>"符号: sein=SeinCharacter  abilities=SeinAbilities  level=SeinLevel  energy=SeinEnergy  mortality=SeinMortality  health=SeinHealthController  soulflame=SeinSoulFlame  jump=SeinJump  doublejump=SeinDoubleJump  playerab=PlayerAbilities  death=SeinDeathCounter  gw=GameWorld  diffc=DifficultyController（用 probe bases -xml -vanilla 生成）"</Description>
+          <LastState/>
+          <Color>808080</Color>
+          <GroupHeader>1</GroupHeader>
+        </CheatEntry>
+      </CheatEntries>
+    </CheatEntry>
+
+    <CheatEntry>
+      <ID>2100</ID>
+      <Description>"【第三方原版指针链】来源: 网络 CE 表 attach_3834.ct，明确引用 ori.exe / mono.dll；未由我们验证"</Description>
+      <LastState/>
+      <Color>0080FF</Color>
+      <GroupHeader>1</GroupHeader>
+      <CheatEntries>
+        <CheatEntry>
+          <ID>2101</ID>
+          <Description>"Total Deaths 总死亡数（"ori.exe"+00A36164 → 14 → D0 → 750 → 50 → 2F8）"</Description>
+          <LastState/>
+          <VariableType>4 Bytes</VariableType>
+          <Address>"ori.exe"+00A36164</Address>
+          <Offsets>
+            <Offset>14</Offset>
+            <Offset>D0</Offset>
+            <Offset>750</Offset>
+            <Offset>50</Offset>
+            <Offset>2F8</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>2102</ID>
+          <Description>"Total Skill Points 能力点总数（"mono.dll"+001F42C4 → 24 → 38 → 3C → 6DC → 50）"</Description>
+          <LastState/>
+          <VariableType>4 Bytes</VariableType>
+          <Address>"mono.dll"+001F42C4</Address>
+          <Offsets>
+            <Offset>24</Offset>
+            <Offset>38</Offset>
+            <Offset>3C</Offset>
+            <Offset>6DC</Offset>
+            <Offset>50</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>2103</ID>
+          <Description>"Total Spirit Points 灵魂点总数（"mono.dll"+001F42C4 → 2C → 38 → 24 → 67C → 50）"</Description>
+          <LastState/>
+          <VariableType>4 Bytes</VariableType>
+          <Address>"mono.dll"+001F42C4</Address>
+          <Offsets>
+            <Offset>2C</Offset>
+            <Offset>38</Offset>
+            <Offset>24</Offset>
+            <Offset>67C</Offset>
+            <Offset>50</Offset>
+          </Offsets>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>2104</ID>
+          <Description>"第三方能力标志脚本（原表 attach_3943.ct）的偏移: Bash+14 ChargeFlame+18 WallJump+1C Stomp+20 DoubleJump+24 ChargeJump+28 Climb+34 Kuro'sFeather+38 SpiritFlame+3C，统一 +8 为 HasAbility —— 与终极版实测值一致，原版是否相同待核验"</Description>
+          <LastState/>
+          <Color>808080</Color>
+          <GroupHeader>1</GroupHeader>
+        </CheatEntry>
+      </CheatEntries>
+    </CheatEntry>
+
+    <CheatEntry>
+      <ID>2200</ID>
+      <Description>"【基础能力】小键盘 1-7（偏移同终极版，⚠ 待核验）"</Description>
+      <LastState/>
+      <Color>808080</Color>
+      <GroupHeader>1</GroupHeader>
+      <CheatEntries>
+        <CheatEntry>
+          <ID>2201</ID>
+          <Description>"1 无限生命 — HealthController.Amount(+1C) / MaxHealth(+20)"</Description>
+          <LastState/>
+          <VariableType>Float</VariableType>
+          <Address>health+1C</Address>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>2202</ID>
+          <Description>"2 无限能量 — SeinEnergy.Current(+20) / Max(+24)"</Description>
+          <LastState/>
+          <VariableType>Float</VariableType>
+          <Address>energy+20</Address>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>2203</ID>
+          <Description>"3 灵魂链接无需冷却 — m_cooldownRemaining(+B0)"</Description>
+          <LastState/>
+          <VariableType>Float</VariableType>
+          <Address>soulflame+B0</Address>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>2204</ID>
+          <Description>"4 不安全区域建链接 — m_holdDownTime(+94) / m_tapRemainingTime(+B8)"</Description>
+          <LastState/>
+          <VariableType>Float</VariableType>
+          <Address>soulflame+94</Address>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>2205</ID>
+          <Description>"5 超级跳 — 6 个跳跃高度: First(+60) Second(+70) Third(+74) Crouch(+58) Backflip(+54) JumpIdle(+64)"</Description>
+          <LastState/>
+          <VariableType>Float</VariableType>
+          <Address>jump+60</Address>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>2206</ID>
+          <Description>"6 无限二段跳 — m_numberOfJumpsAvailable(+40) + PlayerAbilities.DoubleJump.HasAbility([playerab+24]+8)"</Description>
+          <LastState/>
+          <VariableType>4 Bytes</VariableType>
+          <Address>doublejump+40</Address>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>2207</ID>
+          <Description>"7 无限能力点数 — SkillPoints(level+24, 目标 99) / Experience(level+2C)"</Description>
+          <LastState/>
+          <VariableType>4 Bytes</VariableType>
+          <Address>level+24</Address>
+        </CheatEntry>
+      </CheatEntries>
+    </CheatEntry>
+
+    <CheatEntry>
+      <ID>2300</ID>
+      <Description>"【进阶能力】Ctrl+小键盘 1-3（偏移同终极版，⚠ 待核验）"</Description>
+      <LastState/>
+      <Color>808080</Color>
+      <GroupHeader>1</GroupHeader>
+      <CheatEntries>
+        <CheatEntry>
+          <ID>2301</ID>
+          <Description>"Ctrl+1 死亡数归零 — SeinDeathCounter.m_deathCounter(death+14)"</Description>
+          <LastState/>
+          <VariableType>4 Bytes</VariableType>
+          <Address>death+14</Address>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>2302</ID>
+          <Description>"Ctrl+2 100% 探索 — GameWorld.RuntimeAreas(gw+18) → _items+8/_size+C → 区域 m_completionAmount(+14)"</Description>
+          <LastState/>
+          <VariableType>Float</VariableType>
+          <Address>[[[gw+18]+8]]+14</Address>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>2303</ID>
+          <Description>"Ctrl+3 解锁全部基础技能 — 11 项: SpiritFlame+3C WallJump+1C ChargeFlame+18 DoubleJump+24 Bash+14 Stomp+20 Glide+38 Climb+34 ChargeJump+28 Grenade+A8 Dash+AC（每项 [playerab+偏移]+8 = HasAbility）"</Description>
+          <LastState/>
+          <VariableType>Byte</VariableType>
+          <Address>[playerab+3C]+8</Address>
+        </CheatEntry>
+      </CheatEntries>
+    </CheatEntry>
+
+    <CheatEntry>
+      <ID>2400</ID>
+      <Description>"【特殊能力】Ctrl+Shift+小键盘 1"</Description>
+      <LastState/>
+      <Color>C00000</Color>
+      <GroupHeader>1</GroupHeader>
+      <CheatEntries>
+        <CheatEntry>
+          <ID>2401</ID>
+          <Description>"一命保护 — DifficultyController.Difficulty(diffc+18) 锁为 Normal；⛔ LowestDifficulty(diffc+1C) 只读禁写。⚠ 终极版尚未能定位该对象，原版更未验证"</Description>
+          <LastState/>
+          <Color>C00000</Color>
+          <VariableType>4 Bytes</VariableType>
+          <Address>diffc+18</Address>
+        </CheatEntry>
+      </CheatEntries>
+    </CheatEntry>
+
+  </CheatEntries>
+
+  <UserdefinedSymbols>
+    <!-- ★ 原版同样需要每会话更新: probe bases -xml -vanilla -->
+    <SymbolEntry>
+      <Name>sein</Name>
+      <Address>00000000</Address>
+    </SymbolEntry>
+    <SymbolEntry>
+      <Name>abilities</Name>
+      <Address>00000000</Address>
+    </SymbolEntry>
+    <SymbolEntry>
+      <Name>level</Name>
+      <Address>00000000</Address>
+    </SymbolEntry>
+    <SymbolEntry>
+      <Name>energy</Name>
+      <Address>00000000</Address>
+    </SymbolEntry>
+    <SymbolEntry>
+      <Name>mortality</Name>
+      <Address>00000000</Address>
+    </SymbolEntry>
+    <SymbolEntry>
+      <Name>health</Name>
+      <Address>00000000</Address>
+    </SymbolEntry>
+    <SymbolEntry>
+      <Name>soulflame</Name>
+      <Address>00000000</Address>
+    </SymbolEntry>
+    <SymbolEntry>
+      <Name>jump</Name>
+      <Address>00000000</Address>
+    </SymbolEntry>
+    <SymbolEntry>
+      <Name>doublejump</Name>
+      <Address>00000000</Address>
+    </SymbolEntry>
+    <SymbolEntry>
+      <Name>playerab</Name>
+      <Address>00000000</Address>
+    </SymbolEntry>
+    <SymbolEntry>
+      <Name>death</Name>
+      <Address>00000000</Address>
+    </SymbolEntry>
+    <SymbolEntry>
+      <Name>gw</Name>
+      <Address>00000000</Address>
+    </SymbolEntry>
+    <SymbolEntry>
+      <Name>diffc</Name>
+      <Address>00000000</Address>
+    </SymbolEntry>
+  </UserdefinedSymbols>
+</CheatTable>

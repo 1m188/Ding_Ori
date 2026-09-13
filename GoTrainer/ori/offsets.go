@@ -209,15 +209,21 @@ const (
 	DiffNormal  = 1
 	DiffHard    = 2
 	DiffOneLife = 3
-
-	// StaticDiffController = DifficultyController.Instance 静态字段的真实存储地址。
-	// 实测该地址可被外部进程直接读取，返回权威实例指针（与 CE mono 视图一致）。
-	// 获取方式: CE AOB 反查"指向活体实例的引用"，命中项之一即此静态槽。
-	// 若游戏版本变更导致失效，resolver 会自动回退到堆扫描路线。
-	StaticDiffController = 0x061F3D20
 )
 
-// 活体判别阈值（堆扫描加固验证）。
+// ⚠ 已废弃（保留说明以免后人重犯）:
+//
+//	曾有一个硬编码常量 StaticDiffController = 0x061F3D20，声称是
+//	"DifficultyController.Instance 静态字段的真实存储地址"。**它是错的** ——
+//	实测读出来是 0x8240810B 这类非指针值（既不是该对象、也不是任何有效指针），
+//	靠它取到的"实例"是假对象，导致一命保护静默失效且写出垃圾。
+//
+//	教训: mono 的静态字段位于**运行期分配的静态数据块**，不是固定地址；
+//	任何"抄来的绝对地址"都必须经过 `probe` 实地核验，不能直接信。
+//	正确的做法是定位"指向该类型实例的静态槽"（resolver 的 aux 扫描）或
+//	从 SaveSceneManager.SaveData 列表取（见 README §11）。
+
+// 活体判别阈值（仅供文档/历史参考；实际校验见 resolver.validateSein）。
 const (
 	EnergyMaxMin   = 1.0
 	EnergyMaxMax   = 50.0
