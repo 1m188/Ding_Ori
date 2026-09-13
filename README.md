@@ -1023,6 +1023,11 @@ go vet ./... && gofmt -l .        # 提交前检查
 ./oritrainer.exe -selftest       # 非交互定位自检（见 §8-28）
 ```
 
+**发布**：在 GitHub 上 Publish release 会触发 `.github/workflows/release.yml`——
+在 `windows-latest` 上跑 gofmt/vet/单元测试并构建 `oritrainer.exe`，然后把
+**修改器本体**与**风灵月影修改器**（随仓库分发的第三方工具）一起作为该 Release
+的资产上传（`gh release upload --clobber`，可重跑覆盖）。
+
 ## 目录
 
 ```

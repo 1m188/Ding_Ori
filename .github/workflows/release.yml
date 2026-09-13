@@ -1,0 +1,102 @@
+# 发布 Release 时自动构建 Windows 产物，并把产物与风灵月影修改器一起上传到该 Release。
+#
+# 触发: 在 GitHub 上 Publish release（草稿发布 / 直接创建正式 release）。
+# 产物:
+#   1. oritrainer.exe —— 修改器本体（windows/amd64，纯 Go 标准库单文件）
+#   2. 风灵月影《奥日与黑暗森林：终极版》v1.0 Plus 13 修改器（随仓库分发的第三方工具）
+#
+# 说明:
+#   - 本项目是纯 Go 标准库、零依赖，不需要额外的构建步骤；
+#   - 上传用 runner 预装的 gh CLI，凭 GITHUB_TOKEN（由 contents: write 授予），
+#     不引入第三方 action；
+#   - --clobber 允许重跑/重发时覆盖同名资产。
+name: Release
+
+on:
+  release:
+    types: [published]
+
+# 上传 Release 资产需要写权限
+permissions:
+  contents: write
+
+# 同一 tag 的发布只保留一次运行（避免重复上传互相覆盖）
+concurrency:
+  group: release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: 构建并上传 Windows 产物
+    runs-on: windows-latest
+    env:
+      # 纯标准库；关掉 cgo，保证产出可直接分发的单文件
+      CGO_ENABLED: "0"
+      # 第三方修改器（路径含空格，引用时注意加引号）
+      TRAINER: "Ori and the Blind Forest Definitive Edition v1.0 Plus 13 Trainer.exe"
+    steps:
+      # ⚠ 必须在 checkout 之前: windows runner 的 git 默认 core.autocrlf=true，
+      # 检出时会把 LF 换成 CRLF，导致下面的 `gofmt -l` 把每个 .go 都判为未格式化。
+      - name: 关闭 git 自动换行转换
+        shell: bash
+        run: git config --global core.autocrlf false
+
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: GoTrainer/go.mod
+          # 零依赖、没有 go.sum 可作缓存键，关掉缓存避免无谓告警
+          cache: false
+
+      - name: 格式检查、vet、单元测试、构建
+        working-directory: GoTrainer
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::以下文件未通过 gofmt: $unformatted"
+            exit 1
+          fi
+
+          go vet ./...
+          go test ./...
+
+          # 产物名与 README 一致: oritrainer.exe
+          go build -trimpath -ldflags "-s -w" -o oritrainer.exe .
+          ls -l oritrainer.exe
+
+      - name: 确认第三方修改器随仓库存在
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f "$TRAINER" ]; then
+            echo "::error::仓库中未找到 \"$TRAINER\"（它应被 .gitignore 白名单保留并已提交）"
+            exit 1
+          fi
+          ls -l "$TRAINER"
+
+      - name: 打印校验和（便于在 Release 说明里附上）
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum GoTrainer/oritrainer.exe "$TRAINER"
+
+      - name: 上传到 Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.release.tag_name }}"
+          echo "上传资产到 release: $tag"
+          gh release upload "$tag" \
+            GoTrainer/oritrainer.exe \
+            "$TRAINER" \
+            --clobber
+          echo "--- 当前资产 ---"
+          gh release view "$tag" --json assets --jq '.assets[].name'
