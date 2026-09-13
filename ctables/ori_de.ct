@@ -62,21 +62,21 @@
           <CheatEntries>
             <CheatEntry>
               <ID>1102</ID>
-              <Description>"HealthController.Amount（当前生命, float, 点数: 1 球 = 4 点）"</Description>
+              <Description>"SeinHealthController.Amount（当前生命, float, 点数: 1 球 = 4 点）"</Description>
               <LastState/>
               <VariableType>Float</VariableType>
               <Address>health+1C</Address>
             </CheatEntry>
             <CheatEntry>
               <ID>1103</ID>
-              <Description>"HealthController.MaxHealth（生命上限, int, 点数）"</Description>
+              <Description>"SeinHealthController.MaxHealth（生命上限, int, 点数）"</Description>
               <LastState/>
               <VariableType>4 Bytes</VariableType>
               <Address>health+20</Address>
             </CheatEntry>
             <CheatEntry>
               <ID>1104</ID>
-              <Description>"HealthController.VisualMinAmount / VisualMaxAmount（界面插值, +24 / +28）"</Description>
+              <Description>"SeinHealthController.VisualMinAmount / VisualMaxAmount（界面插值, +24 / +28）"</Description>
               <LastState/>
               <VariableType>Float</VariableType>
               <Address>health+24</Address>
@@ -148,7 +148,7 @@
             </CheatEntry>
             <CheatEntry>
               <ID>1135</ID>
-              <Description>"SeinSoulFlame.HoldDownDuration（蓄力时长, float, 默认 0.5）——不安全区它参与蓄力回退；临时置 +Inf 可让 1.0 保持到施放判定"</Description>
+              <Description>"SeinSoulFlame.HoldDownDuration（蓄力时长, float, 源码默认 0.7）——不安全区它参与蓄力回退；临时置 +Inf 可让 1.0 保持到施放判定"</Description>
               <LastState/>
               <VariableType>Float</VariableType>
               <Address>soulflame+98</Address>
@@ -168,7 +168,7 @@
               <Address>soulflame+BC</Address>
             </CheatEntry>
             <CheatEntry>
-              <ID>1135</ID>
+              <ID>1139</ID>
               <Description>"SeinSoulFlame.m_delayOnGround（落地延迟, float, >0 时不可施放）"</Description>
               <LastState/>
               <VariableType>Float</VariableType>
@@ -417,7 +417,7 @@
             </CheatEntry>
             <CheatEntry>
               <ID>1213</ID>
-              <Description>"List._items 指向的是**数组对象**（不是元素数组首地址！）+0x08 才是元素区）"</Description>
+              <Description>"List._items（List+0x08）指向的是**数组对象**，不是元素数组首地址！元素区在数组对象 +0x10 起（前 4 个 dword 是 vtable/monitor/bounds/max_length）"</Description>
               <LastState/>
               <VariableType>4 Bytes</VariableType>
               <Address>[[gw+18]+8]</Address>

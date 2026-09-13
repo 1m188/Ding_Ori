@@ -11,7 +11,7 @@
        （终极版是 +54/+58/+60/+64/+68/+70/+74）
     2. PlayerAbilities 基础能力只有 9 项（原版没有 Grenade/Dash 字段）。
 
-  原版专属环境事实（比偏移更容易踩坑，详见 README §2 / §8-24）：
+  原版专属环境事实（比偏移更容易踩坑，详见 README §2 / §8-27）：
     - 托管堆在**低地址**（玩家对象实测 0x01A8E6C0），不是终极版的 0x5x-0x7B；
     - vtable / klass 在 0x35B7xxxx 段，字段描述符在 0x27Axxxxx 段；
     - 低区约 160MB，辅助单例（死亡/世界/计时器）扫描需 15-25 秒；
@@ -33,7 +33,7 @@
 
     <CheatEntry>
       <ID>2000</ID>
-      <Description>"★ 原版字段偏移已于 2026-09 实机核验；差异见本表头与 README §5/§8-24"</Description>
+      <Description>"★ 原版字段偏移已于 2026-09 实机核验；差异见本表头与 README §5/§8-27"</Description>
       <LastState/>
       <Color>FF0000</Color>
       <GroupHeader>1</GroupHeader>
@@ -123,7 +123,7 @@
       <CheatEntries>
         <CheatEntry>
           <ID>2201</ID>
-          <Description>"1 无限生命 — HealthController.Amount(+1C) / MaxHealth(+20)"</Description>
+          <Description>"1 无限生命 — SeinHealthController.Amount(+1C, float) / MaxHealth(+20, int)"</Description>
           <LastState/>
           <VariableType>Float</VariableType>
           <Address>health+1C</Address>

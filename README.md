@@ -11,7 +11,7 @@
 上下文的新会话**能在最短时间内接手。
 
 > 当前状态：**终极版与原版功能均已实测可用**。原版核验于 2026-09（Unity 5.0 /
-> mono 地址空间与终极版不同，见 §2、§8-24）；两版字段偏移差异只有 `SeinJump`
+> mono 地址空间与终极版不同，见 §2、§8-27）；两版字段偏移差异只有 `SeinJump`
 > 与 `PlayerAbilities` 的基础能力清单，其余同表通用（§5）。
 
 ---
@@ -23,6 +23,9 @@
 1. 以管理员权限启动 `oritrainer.exe`（`go build .` 的默认产物名），在版本选择界面用 ↑↓ 选择，回车进入。
 2. 启动对应游戏并进入存档。修改器自动附加，约 **0.2–1 秒**内定位活体玩家对象
    （横向对比：早期版本是全堆扫描 9–15 秒，且经常定位失败）。
+   死亡数 / 探索度 / 计时器这类**单例**是后台异步定位的：终极版几秒内完成，
+   **原版低区约 160MB，需要 15–25 秒**——这期间对应功能显示"定位中"，
+   扫描完成后自动生效，不需要重开修改器（见 §2、§8-27）。
 3. ESC 可随时返回版本选择（仅在修改器窗口有焦点时生效）。
 
 ## 热键（两档）
@@ -33,7 +36,7 @@
 > 为什么没有 Ctrl+Shift 档：Windows Terminal 默认把 `Ctrl+Shift+1..9` 绑成
 > "新建标签页"，会把按键在送到程序之前吃掉。详见维护手册 §8-23。
 
-**普通功能 —— 小键盘 1-9/0（终极版）**
+**普通功能 —— 小键盘 1-9（终极版）**
 
 | 热键 | 功能 | 状态 |
 |---|---|---|
@@ -84,8 +87,8 @@
 **关闭窗口/注销/关机**——都会执行同一次收尾（`teardownSession` → `DeactivateAll`）：
 
 - **能复原的复原**：如超级跳的 6 个跳跃高度、灵魂链接的 `HoldDownDuration`；
-- **一次性修改型不动**：解锁技能、三把钥匙、一命保护难度、重置时间、100% 探索、
-  能力点数等（设计如此，且会被游戏存档带进存档）；
+- **一次性修改型不动**：解锁技能、三把钥匙、重置时间、100% 探索、能力点数等
+  （一命保护难度也在其中，但仅终极版；设计如此，且会被游戏存档带进存档）；
 - **HOME = 全开/全关切换**（不离开会话）：只要还有功能没开，就全部打开（已开的跳过）；
   已经全开时则关闭全部（"关"= 同样的还原/关闭逻辑）。
 
@@ -97,7 +100,7 @@
 - **无限生命 / 无限能量 = 持续补满到上限**：每周期读上限并写满当前值。
   残血/空能量时激活也会立即补满。
 - **超级跳 / 无限二段跳 = 捕获原值后放大 / 维持，关闭时还原**。
-- **无限冲刺 = 只解锁基础冲刺 + 解除冲刺次数限制**：授予 `PlayerAbilities.Dash`
+- **无限冲刺（仅终极版）= 只解锁基础冲刺 + 解除冲刺次数限制**：授予 `PlayerAbilities.Dash`
   （基础能力，关闭不还原，§8-15），再持续清 `m_hasDashed` 使冲刺不再"空中限一次"
   ——**只要游戏允许在此处冲刺就无限**（地面任何时候；空中需**自己在技能树购买**
   AirDash，本功能绝不代授/代买，只读它做状态提示）。详见 §7-15。
@@ -112,7 +115,7 @@
 - **重置时间 = 冻结在 0**：开启期间每周期把 `GameTimer.CurrentTime` 写 0，
   游戏时间恒为 `0:00:00`；关闭后从 0 重新累计。暂停界面 "花费时间" 由
   `TimeCounterDisplay` 每 1 秒读一次，故归零后最多 1 秒同步（详见 §7-13）。
-- **一命保护 = 只在"一命存档"上把 `Difficulty` 顶成 Easy**：死亡判定读的就是
+- **一命保护（仅终极版）= 只在"一命存档"上把 `Difficulty` 顶成 Easy**：死亡判定读的就是
   这个字段，变成 Easy 后"清档链"整条不成立，死亡退化为普通复活；顺带享受 Easy
   的伤害减半/敌人血量降低。**`LowestDifficulty`（成就判定字段）只读保留**。
   关闭功能不还原难度（保护是粘性的，避免误关就恢复一命）。详见 §7-7。
@@ -139,8 +142,9 @@
 3. 我们在**低地址区**扫这个模式 → 拿到槽位地址 → **每周期重读该槽**（而不是缓存
    对象地址），于是角色重生也能立刻跟上。
 4. 拿到玩家对象后，其余对象都是**沿对象链直读**（见 §3 的链）。
-5. 字段偏移**不能靠源码声明的顺序推算**（mono 会重排），必须用
-   `probe offs` 从运行中的 mono 元数据里读（见 §4）。
+5. 字段偏移**不能靠"源码声明顺序 + 想当然的对象头大小"推算**（mono 按字段
+   大小分组重排，首个字段偏移也不是 0x08），必须用 `probe offs` /
+   `probe fieldoff` / `probe snap` 从运行中的 mono 元数据里读（见 §4）。
 
 **改一个功能的标准流程**（详见 §10）。
 
@@ -152,7 +156,9 @@
 | `GoTrainer/core/memory.go` | 进程附加、RPM/WPM、区域枚举、控制台输入、存档回滚工具 |
 | `GoTrainer/ori/resolver.go` | 对象定位（活体玩家 / 各单例）、快照读取 |
 | `GoTrainer/ori/features.go` | 功能定义与执行器（冻结/补满/放大/置位/遍历） |
-| `GoTrainer/ori/offsets.go` | **唯一地址维护点**：所有字段偏移常量 |
+| `GoTrainer/ori/offsets.go` | **唯一地址维护点**：所有字段偏移常量（含按版本取值的那几个） |
+| `GoTrainer/ori/diag.go` | `probe snap` / `probe fieldoff` 的只读核验实现 |
+| `GoTrainer/ori/resolver_profile_test.go` | 回归测试：版本 ↔ 对象下界/vtable 带 |
 | `GoTrainer/cmd/probe/main.go` | 诊断工具（等价 CE 的核心能力），见 §9 |
 | `ctables/ori_de.ct` / `ori_vanilla.ct` | 与修改器同步的 CE 表，见 §10 |
 
@@ -185,11 +191,9 @@
 要点：
 
 - **原版托管堆在低地址**（实测玩家对象 `0x01A8E6C0`）：沿用终极版的
-  `0x40000000` 对象下界会**一个对象都认不出来**（见 §8-24）。
+  `0x40000000` 对象下界会**一个对象都认不出来**（见 §8-27）。
 - **原版 vtable 在 `0x35B7xxxx`**：`findStaticData` 的扫描带若只允许终极版的
   `0x2A/0x50` 段，`Keys` 静态块永远定位不到。
-
-要点：
 
 - **RPM 地址用零扩展**（`uint32 → uintptr`）。WoW64 目标的地址空间就是宿主 64 位
   空间的低 4GB，零扩展即正确；符号扩展会指向未映射区。
@@ -256,11 +260,14 @@ SeinCharacter
 "值能解析成目标类名"的槽位，缓存槽地址并在每周期重读；槽失效则清空重扫（带指数退避）。
 
 **注意**：
-- `GameWorld` / `SeinDeathCounter` / `GameTimer` / `DifficultyController` 都能定位；
-  但 `GameTimer` / `GameController` / `DifficultyController` 的对象在 `0x2A/0x2F`
-  段，低于 `minObjAddr(0x40000000)`，必须用 `minObjLowAddr` 下界才能扫到（见 §8-22）。
-- `GameController` 的静态槽也能扫到（`0x063D3D80 -> 0x2AC03C00`），只是修改器目前
-  不需要它；`GameController.Timer` 指向的 `GameTimer` 可直接用上面的方式拿到。
+- 终极版能定位 `GameWorld` / `SeinDeathCounter` / `GameTimer` / `DifficultyController`；
+  其中 `GameTimer` / `GameController` / `DifficultyController` 的对象在 `0x2A/0x2F`
+  段，低于终极版下界 `minObjAddr(0x40000000)`，必须用 `minObjLowAddr` 才能扫到
+  （见 §8-22）。**原版没有 DifficultyController**，且原版下界本身就只有 `0x10000`，
+  这些对象都在低区堆内，不存在"低于下界"的问题（见 §8-27）。
+- `GameController` 的静态槽也能扫到（终极版实测 `0x063D3D80 -> 0x2AC03C00`），
+  只是修改器目前不需要它；`GameController.Timer` 指向的 `GameTimer` 可直接用
+  上面的方式拿到。
 
 ## §4 mono 元数据读取（怎么查字段偏移）
 
@@ -291,11 +298,17 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 +0x08 = 字段在对象内的偏移     ← 我们要的
 ```
 
-`probe offs <类名> <字段名...>` 就是这个逻辑 + 按声明类过滤。
+`probe offs <类名> <字段名...>` 就是这个逻辑 + 按声明类过滤；
+`probe fieldoff <类名> <字段名>` 是它的单字段快查版（对 `Max` 这类常见名更快）。
 
-⚠⚠ **元数据偏移 ≠ 源码字段声明顺序**：mono 会重排。实测例子：
-`PlayerAbilities.DoubleJump` 按声明顺序推算是 `+0x18`，**实际是 `+0x24`**；
-`DoubleJumpUpgrade` 推算 `+0x48`，实际 `+0x54`。**必须查元数据，不要推算。**
+⚠⚠ **不要按"源码声明顺序 + 对象头大小"推算偏移**：
+- mono **按字段大小分组**布局（4 字节一组、更小的排后面），所以混类型的类
+  光看声明顺序就会算错；同尺寸字段在实测的两个 build 里恰好保持了声明顺序，
+  但这是观察结果、不是保证。
+- **首个字段偏移不是 0x08**：`PlayerAbilities` 首字段实测就是 `+0x14`。
+  于是 `DoubleJump`（声明第 5 个）若按"0x08 + 4×4"推会得 `+0x18`，
+  **实际是 `+0x24`**（`DoubleJumpUpgrade` 同理：推算 `+0x48`、实际 `+0x54`）。
+- 结论不变：**必须查元数据**（`probe offs` / `probe fieldoff` / `probe snap`）。
 
 ## §5 字段偏移总表（**终极版 / 原版通用**，均已由元数据+活体内存双重核验）
 
@@ -364,7 +377,7 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 
 > ⚠ 原版该类字段顺序不同：`+0x24` 落在 `m_builder` 指针上，`m_sendTelemetryTimer`
 > 不在该位置。`scanLowBandAux` 的 GameTimer 预筛在原版只用 `CurrentTime` +
-> `m_waitTillSave` 两个字段（见 §8-24）。
+> `m_waitTillSave` 两个字段（见 §8-27）。
 
 > 暂停界面显示的"花费时间" = `GameTimer.DisplayTimeAsString`（由 `CurrentTime`
 > 派生，只显示分钟数）；`TimeCounterDisplay.Update()` 每 1 秒把它写进 GUIText。
@@ -412,7 +425,7 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 | m_numberOfJumpsAvailable | 0x40 | 剩余跳跃次数（int） |
 | m_remainingLockTime | 0x44 | |
 
-### SeinDashAttack（冲刺，`SeinAbilities+0x80`）
+### SeinDashAttack（冲刺，`SeinAbilities+0x80`）⚠仅终极版
 
 组件只有**获得冲刺能力后**才实例化（未解锁时 `Abilities+0x80 == 0`）。
 
@@ -427,7 +440,8 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 
 ### PlayerAbilities
 
-- 能力字段全部是 `CharacterAbility` 引用（连续 `0x14`..`0xB0`，共 40 项）；
+- 能力字段全部是 `CharacterAbility` 引用，从 `+0x14` 起连续排列：
+  **终极版 43 项（0x14..0xBC）/ 原版 37 项（0x14..0xA4）**；
   `CharacterAbility` 内 `HasAbility` 在 **+0x08，1 字节 bool**。
 - **基础能力** ← 修改器"解锁全部基础技能"只给这些（**终极版 11 项 / 原版 9 项**，
   原版没有 Grenade/Dash 两个字段）：
@@ -479,6 +493,11 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 
 ## §7 游戏内部机制事实（改功能前必读）
 
+> 机制依据是**终极版**反编译源码（`Assembly-CSharp.dll`）。标 **⚠仅终极版**
+> 的条目在原版不存在（原版没有冲刺、难度/一命机制）。两版共有的机制（生命单位、
+> 能力两类同型、二段跳门槛、灵魂链接轻点/长按、钥匙静态类等）已在 ori.exe 上
+> 用 `probe snap -vanilla` 复核过偏移与取值。
+
 1. **生命单位是"点"，不是"球"**：`HealthUpgradesCollected => MaxHealth/4 - 3`，
    即 **1 个生命球 = 4 点**。初始 3 球在内存里是 `12`。UI 显示要除以 4。
 2. **能力分两类但同一类型**：基础能力与技能树被动都是 `CharacterAbility`，
@@ -489,7 +508,8 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 4. **能力组件的实例化**：`SeinNestedPrefab.IsInstantiated` 的 setter 在置 false 时
    会 `Destroy()` 组件；游戏只在"正规授予能力"时（`PlayerAbilities.SetAbility` →
    `Prefabs.EnsureRightPrefabsAreThereForAbilities`）实例化。因此**直接写标志位后，
-   少数能力（滑翔/冲刺/猛击等非默认实例化的）可能要等存档重载或场景切换才实体化**。
+   少数能力（滑翔/猛击等非默认实例化的）可能要等存档重载或场景切换才实体化**
+   （原版基础能力只有 9 项，没有冲刺/Grenade）。
    默认实例化的有：Carry/Crouch/Fall/Jump/PushAgainstWall/Run/Idle/StandingOnEdge/
    Swimming/SoulFlame/GrabPushPull/SpiritFlame/PickupProcessor。
 5. **跳跃高度不是单一变量**：`SeinJump.PerformJump()` 会分支——移动跳/站立跳
@@ -507,7 +527,7 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
      才给。**与地图百分比、与收集品都无关——100% 探索给不了它**，必须自己去穿墙。
    - 二段跳等"控制"作弊会影响成就资格的路子是 `CheatsHandler`，
      而技能树被动的 `HasAbility` 标志不属于该机制。
-7. **一命难度的清档链路**（"一命保护"实现依据）：
+7. **一命难度的清档链路**（"一命保护"实现依据）⚠仅终极版：
    - 死亡时 `SeinDamageReciever.OnKill`：`if (DifficultyController.Instance.Difficulty
      == OneLife) { CurrentSaveSlot.WasKilled = true; SaveGameController.PerformSave();
      SaveSlotBackupsManager.DeleteAllBackups(); }`，随后 `OnKillRoutine` 再按同一个
@@ -586,7 +606,7 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
       会连带影响场景触发/过场/传送；强行置位却不做副本，**内容与能力不会获得、
       世界状态自相矛盾，容易卡关**（详见 §8-24 的风险记录）。
 
-15. **冲刺为什么只能在空中冲一次（"无限冲刺"依据）**
+15. **冲刺为什么只能在空中冲一次（"无限冲刺"依据）⚠仅终极版**
     `SeinDashAttack.CanPerformNormalDash()`：
 
     ```
@@ -763,6 +783,8 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
     → 教训：**"找不到对象"优先怀疑地址范围/对齐过滤，而不是对象不存在**；
     一个类的静态块里往往同时住着好几个"定位不到"的单例；放宽过滤时要**成组检查**
     所有同带对象，别只改当前那个。
+    → 版本注记: 以上是**终极版**的地址现象；原版没有 DifficultyController，
+    GameTimer 也在低区堆内，对应问题与修法见 §8-27。
 
 23. **按 Ctrl+Shift+小键盘 N，修改器"像退出了"（其实是被 Windows Terminal 吃掉）**
     → 新终端（Windows Terminal 1.24）`defaults.json` 默认把
@@ -786,8 +808,9 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
     C# 的 `static class` 没有实例，且它是嵌套类，按"类名 + 实例 vtable"那套都不好使。
     → 修：改走**字段名描述符**：扫描元数据里的字段名字符串 → 找指向它的 4 字节槽
     `H`（描述符布局 `{name*, klass*, offset}`）→ 从 `H+4` 拿到 klass 并校验类名；
-    再在 vtable 带（0x2A-0x2B / 0x50-0x53）找 `u32(V)==klass` 且 `u32(V+0x0C)`
-    指向"字节全 ≤1"小块的槽 → `static_data = u32(V+0x0C)`。
+    再在 **vtable 带**找 `u32(V)==klass` 且 `u32(V+0x0C)` 指向"字节全 ≤1"小块的槽
+    → `static_data = u32(V+0x0C)`。档带**随版本不同**: 终极版 `0x2A-0x2B / 0x50-0x53`，
+    原版 `0x35B7` 段（代码里由 `ApplyProfile` 设置 `vtableBands`，见 §8-27）。
     → 旁证：先确认了 `Events` 当前读数为全 0，并与当前存档一致（`SaveSlotInfo`
     显示载入的是 `sunkenGlades`、进度 10 的初期档），才相信静态块找对了；
     另外 `SpiritTreeReached` 不在暂停界面六图标里，不能用它当"必然为 1"的对照。
@@ -832,7 +855,7 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
     → 配套加固: `DeactivateFeature` 在还原前用 `Runtime.HasProcess()` 确认进程仍
     绑定——F12 会临时 `SetProcess(nil)`，此时若去写内存会空指针 panic。
 
-24. **原版（ori.exe）整套功能"定位全失败 / Keys 静态块找不到 / 计时器找不到"**
+27. **原版（ori.exe）整套功能"定位全失败 / Keys 静态块找不到 / 计时器找不到"**
     → 原版是 Unity 5.0 的另一份 mono 运行时，**地址空间和终极版完全不同**：
     托管堆在**低地址**（实测玩家对象 `0x01A8E6C0`，而代码里的对象下界是
     终极版的 `0x40000000`）；vtable 在 `0x35B7xxxx`（代码只允许终极版的
@@ -846,7 +869,7 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
     → 附带事实: 原版低区约 160MB，辅助单例扫描需 15–25 秒，首次附加后
     "死亡数/探索度/计时器"类功能会先显示"定位中"，扫描完成后自动生效。
 
-25. **原版修改器界面一直卡在"Sein 扫描中…（进入存档后可定位）"**
+28. **原版修改器界面一直卡在"Sein 扫描中…（进入存档后可定位）"**
     → 主程序建会话时写成 `&ori.Runtime{}`，**`Prof` 是 nil**；而 `ApplyProfile`
     只在 `r.Prof != nil` 时被 `SetProcess` 调用 → 原版仍用终极版的对象下界
     `0x40000000` 扫描，原版玩家对象在 `0x01A8E6C0`，永远命中不了。
@@ -862,7 +885,14 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 
 ## §9 诊断工具 `probe`（等价 CE 的核心能力）
 
-全部命令都可加 `-vanilla` 切换到原版进程（`ori.exe`）。常用：
+全部命令都可加 `-vanilla` 切换到原版进程（`ori.exe`）。
+
+另外修改器自身有非交互自检（不进入 TUI）：
+`oritrainer.exe -selftest` → 对每个在运行的目标版本跑一遍真实的"附加 + 定位"并
+打印结果（退出码 0=至少一个成功 / 1=有进程但定位失败 / 2=目标都没运行）。
+排"界面一直扫描中"最快，见 §8-28。
+
+常用命令：
 
 | 命令 | 用途 |
 |---|---|
@@ -889,6 +919,13 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 | `racetest` | 复现"会话切换 + 引擎并发"时序，配合 `-race` 用 |
 | `conin` | **确定性自测控制台输入通路**（注入合成按键再读回，无需人工按键） |
 | `staticblock` / `diffobj` / `diffname` / `diffstrict` / `onescan` / `staticmap` / `staticref` | 各类定位探索工具，详见源码注释 |
+| `instances <类名>` | 按类名枚举实例（终极版堆带判据） |
+
+> ⚠ 版本适用性: 上面标注"堆区/静态块带"的**探索类**命令（`heapfind` /
+> `singleton` / `slotscan` / `instances` / `staticblock` / `diff*` 等）的地址判据
+> 是按**终极版**堆带写的，原版跑可能一无所获。原版的偏移/取值核查请用
+> `snap` / `fieldoff` / `diag` / `keys` / `map` / `timer`（这些走 `Runtime`，
+> 已版本自适应）。`onelife` 仅终极版有意义（原版没有 DifficultyController）。
 
 自测样例（不需要游戏也能跑）：
 
@@ -901,13 +938,15 @@ probe feats     → 键位表 + "无重复 ✓"
 
 1. **先从源码确认机制**：ILSpy 打开 `Assembly-CSharp.dll`，找到对应类/方法，
    看清"游戏到底读/写哪个字段、有哪些前置条件"。
-2. **用元数据确认偏移**：`probe offs <类> <字段>`（**不要按源码顺序推算**）。
+2. **用元数据确认偏移**：`probe offs <类> <字段>` 或 `probe fieldoff <类> <字段>`
+   （**不要按源码顺序推算**，见 §4.2）；换版本/换 build 时先跑 `probe snap`。
    新偏移写进 `ori/offsets.go`（唯一维护点），并把来源/用途写进注释。
 3. **实现执行器**：在 `features.go` 里按语义选执行器，注意
    - 取址一律走 `Runtime.Addrs()/SubAddr()`（加锁）；
    - 需要还原的用 `OnDeactivate` 并在 `DeactivateFeature` 的 switch 里登记；
    - 幂等/一次性动作用"开启期间维持、关闭不动"。
-4. **构建**：`cd GoTrainer && go build ./... && go vet ./...`
+4. **构建**：`cd GoTrainer && go build ./... && go vet ./...`；要让修改器真正生效
+   还要 `go build -o oritrainer.exe .`（`go build ./...` 不会更新仓库里的 exe）。
 5. **键位/顺序自检**：`probe feats`（确认无重复、档位正确、界面顺序由简到繁）。
 6. **实机验证**：`probe feat <数字> [秒] [-ctrl|-shift]`，看状态与目标内存值；
    **写入型功能要验证"改回去/还原"也确实生效**。定位类问题（一直扫描中）先用
@@ -920,9 +959,10 @@ probe feats     → 键位表 + "无重复 ✓"
      实测后把表头状态改为"已核验"并写明核验日期与命令（2026-09 起原版已全量核验）。
 8. **提交**：说明"现象→根因→修法"，便于回溯。
 
-键位分配规则（**只有两档**）：普通功能用**小键盘 1-9/0**；特殊功能用
-**Ctrl+小键盘 1..N**（含一命保护，排最后）。每档内顺序编号、不留空位。
-不再使用 Ctrl+Shift 档（原因见 §8-23）。
+键位分配规则（**只有两档**）：普通功能用**小键盘**（终极版 1-9；原版 1-8，
+因为没有"无限冲刺"）；特殊功能用 **Ctrl+小键盘**（终极版 1-6，一命保护排最后；
+原版 1-5，没有一命保护）。每档内顺序编号、不留空位，按版本自动顺延
+（`BuildFeatures(prof)`）。不再使用 Ctrl+Shift 档（原因见 §8-23）。
 
 **界面显示顺序必须与键位复杂度一致**（从一般到特殊）：
 
@@ -938,7 +978,7 @@ probe feats     → 键位表 + "无重复 ✓"
 ## §11 未解决 / 待办
 
 **原版支持（2026-09 完成）**：地址空间/vtable 带按版本适配后，13 项功能在原版
-实机逐项验证通过（`probe feat <数字> -vanilla`）。两版差异与核验结论见 §5、§8-24。
+实机逐项验证通过（`probe feat <数字> -vanilla`）。两版差异与核验结论见 §5、§8-27。
 
 **已知限制**：
 - 原版低区约 160MB，`scanLowBandAux` 一次扫描需 **15–25 秒**；附加后前 ~25 秒内
@@ -955,16 +995,18 @@ probe feats     → 键位表 + "无重复 ✓"
 
 ## §12 资料与来源
 
-- **反编译**：`<游戏目录>/OriDE_Data/Managed/Assembly-CSharp.dll`（无混淆），
-  用 ILSpy 反编译。本 README 中所有"源码依据"均出自它。
+- **反编译**（用 ILSpy，无混淆）：本 README 的"源码依据"出自这两份
+  `Assembly-CSharp.dll`——终极版 `<游戏目录>/OriDE_Data/Managed/`，原版
+  `<游戏目录>/Ori_Data/Managed/`。机制描述以终极版为准，原版差异见 §8-27。
 - **第三方 CE 表**（用于交叉验证，原始文件已按"只保留两张表"的要求删除，
   可在 git 历史 `2e91d8c`（初始提交）找回）：
   - `attach_3834.ct`：**原版**指针链（`"ori.exe"+00A36164` 死亡数、
     `"mono.dll"+001F42C4` 能力点/灵魂点）——已转录进 `ori_vanilla.ct`。
-  - `attach_3943.ct`：能力标志读取脚本（偏移与我们核验的 11 项基础能力**完全一致**）
-    + 生命/能量 AOB 脚本——要点已记录在 §5 / `ori_vanilla.ct`。
+  - `attach_3943.ct`：能力标志读取脚本（偏移与我们核验的**两版共有的 9 项**基础
+    能力完全一致）+ 生命/能量 AOB 脚本——要点已记录在 §5 / `ori_vanilla.ct`。
   - `attach_12228.ct`：CE v27 mono 表（`usemono()` + `define`），478 项，
-    含 SeinCharacter/Abilities/Jump 全字段，可作将来核验原版/写 AOB 的参考。
+    含 SeinCharacter/Abilities/Jump 全字段；本项目的原版核验已完成（§8-27），
+    该表保留作交叉参考。
 - **本项目的教训来源**：全部为本项目实测（见 §8）。
 
 ---
@@ -978,6 +1020,7 @@ cd GoTrainer
 go build .                       # 修改器本体（产物名取 go.mod 模块默认: oritrainer.exe）
 go build -o probe.exe ./cmd/probe  # 诊断工具
 go vet ./... && gofmt -l .        # 提交前检查
+./oritrainer.exe -selftest       # 非交互定位自检（见 §8-28）
 ```
 
 ## 目录
@@ -989,16 +1032,18 @@ GoTrainer/
   ori/resolver.go      对象定位
   ori/features.go      功能与执行器
   ori/offsets.go       ★ 唯一地址维护点
-  cmd/probe/main.go    诊断工具
+  ori/diag.go          probe 的偏移核验/快照（snap、fieldoff）
+  ori/resolver_profile_test.go  版本↔地址空间绑定的回归测试
+  cmd/probe/main.go    诊断工具（见 §9）
 ctables/
   ori_de.ct            终极版字段对照表（与修改器同步）
-  ori_vanilla.ct       原版表（偏移未核验，含第三方原版指针链）
+  ori_vanilla.ct       原版字段对照表（2026-09 已核验，含第三方原版指针链）
 ```
 
 ## 已知边界
 
 - 仅支持 32 位 mono 目标；地址策略与 WoW64 零扩展绑定。
 - 需要管理员权限（`OpenProcess` 读写目标内存）。
-- 原版未验证（见 §11）。
+- 原版字段偏移与功能已于 2026-09 实机核验（差异见 §8-27/§11）。
 - 成就相关：若游戏内调试菜单被启用过（`CheatsHandler.DebugWasEnabled`），
   **任何修改器操作都不会影响成就**（因为游戏自己就不再发放）。
