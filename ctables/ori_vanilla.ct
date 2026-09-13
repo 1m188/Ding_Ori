@@ -41,7 +41,7 @@
         </CheatEntry>
         <CheatEntry>
           <ID>2002</ID>
-          <Description>"符号: sein=SeinCharacter  abilities=SeinAbilities  level=SeinLevel  energy=SeinEnergy  mortality=SeinMortality  health=SeinHealthController  soulflame=SeinSoulFlame  jump=SeinJump  doublejump=SeinDoubleJump  playerab=PlayerAbilities  death=SeinDeathCounter  gw=GameWorld  diffc=DifficultyController（用 probe bases -xml -vanilla 生成）"</Description>
+          <Description>"符号: sein=SeinCharacter  abilities=SeinAbilities  level=SeinLevel  energy=SeinEnergy  mortality=SeinMortality  health=SeinHealthController  soulflame=SeinSoulFlame  jump=SeinJump  doublejump=SeinDoubleJump  playerab=PlayerAbilities  death=SeinDeathCounter  gw=GameWorld  diffc=DifficultyController  timer=GameTimer（用 probe bases -xml -vanilla 生成）"</Description>
           <LastState/>
           <Color>808080</Color>
           <GroupHeader>1</GroupHeader>
@@ -110,7 +110,7 @@
 
     <CheatEntry>
       <ID>2200</ID>
-      <Description>"【基础能力】小键盘 1-7（偏移同终极版，⚠ 待核验）"</Description>
+      <Description>"【普通功能】小键盘 1-7（偏移同终极版，⚠ 待核验）"</Description>
       <LastState/>
       <Color>808080</Color>
       <GroupHeader>1</GroupHeader>
@@ -169,7 +169,7 @@
 
     <CheatEntry>
       <ID>2300</ID>
-      <Description>"【进阶能力】Ctrl+小键盘 1-3（偏移同终极版，⚠ 待核验）"</Description>
+      <Description>"【特殊功能】Ctrl+小键盘 1-4（偏移同终极版，⚠ 待核验）"</Description>
       <LastState/>
       <Color>808080</Color>
       <GroupHeader>1</GroupHeader>
@@ -195,19 +195,26 @@
           <VariableType>Byte</VariableType>
           <Address>[playerab+3C]+8</Address>
         </CheatEntry>
+        <CheatEntry>
+          <ID>2304</ID>
+          <Description>"Ctrl+4 重置时间 — GameTimer.CurrentTime(timer+1C, float 秒) 写 0；⚠ 原版偏移未核验（核验: probe timer -vanilla）"</Description>
+          <LastState/>
+          <VariableType>Float</VariableType>
+          <Address>timer+1C</Address>
+        </CheatEntry>
       </CheatEntries>
     </CheatEntry>
 
     <CheatEntry>
       <ID>2400</ID>
-      <Description>"【特殊能力】Ctrl+Shift+小键盘 1"</Description>
+      <Description>"【特殊功能】Ctrl+小键盘 5"</Description>
       <LastState/>
       <Color>C00000</Color>
       <GroupHeader>1</GroupHeader>
       <CheatEntries>
         <CheatEntry>
           <ID>2401</ID>
-          <Description>"一命保护 — DifficultyController.Difficulty(diffc+18) 锁为 Normal；⛔ LowestDifficulty(diffc+1C) 只读禁写。⚠ 终极版尚未能定位该对象，原版更未验证"</Description>
+          <Description>"Ctrl+5 一命保护 — DifficultyController.Difficulty(diffc+18) 锁为 Easy(0)（死亡不清档 + 伤害减半）；⛔ LowestDifficulty(diffc+1C) 只读禁写。⚠ 偏移抄自终极版，原版未核验（核验: probe onelife -vanilla）"</Description>
           <LastState/>
           <Color>C00000</Color>
           <VariableType>4 Bytes</VariableType>
@@ -270,6 +277,10 @@
     </SymbolEntry>
     <SymbolEntry>
       <Name>diffc</Name>
+      <Address>00000000</Address>
+    </SymbolEntry>
+    <SymbolEntry>
+      <Name>timer</Name>
       <Address>00000000</Address>
     </SymbolEntry>
   </UserdefinedSymbols>

@@ -30,7 +30,7 @@
       <CheatEntries>
         <CheatEntry>
           <ID>1001</ID>
-          <Description>"符号含义: sein=SeinCharacter  abilities=SeinAbilities  level=SeinLevel  energy=SeinEnergy  mortality=SeinMortality  health=SeinHealthController  soulflame=SeinSoulFlame  jump=SeinJump  doublejump=SeinDoubleJump  playerab=PlayerAbilities  death=SeinDeathCounter  gw=GameWorld  diffc=DifficultyController"</Description>
+          <Description>"符号含义: sein=SeinCharacter  abilities=SeinAbilities  level=SeinLevel  energy=SeinEnergy  mortality=SeinMortality  health=SeinHealthController  soulflame=SeinSoulFlame  jump=SeinJump  doublejump=SeinDoubleJump  playerab=PlayerAbilities  death=SeinDeathCounter  gw=GameWorld  diffc=DifficultyController  timer=GameTimer"</Description>
           <LastState/>
           <Color>808080</Color>
           <GroupHeader>1</GroupHeader>
@@ -47,7 +47,7 @@
 
     <CheatEntry>
       <ID>1100</ID>
-      <Description>"【基础能力】小键盘 1-7"</Description>
+      <Description>"【普通功能】小键盘 1-7"</Description>
       <LastState/>
       <Color>0080FF</Color>
       <GroupHeader>1</GroupHeader>
@@ -303,7 +303,7 @@
 
     <CheatEntry>
       <ID>1200</ID>
-      <Description>"【进阶能力】Ctrl+小键盘 1-3"</Description>
+      <Description>"【特殊功能】Ctrl+小键盘 1-4"</Description>
       <LastState/>
       <Color>00C000</Color>
       <GroupHeader>1</GroupHeader>
@@ -465,37 +465,89 @@
           </CheatEntries>
         </CheatEntry>
 
+        <CheatEntry>
+          <ID>1240</ID>
+          <Description>"Ctrl+4 重置时间 — 把 GameTimer.CurrentTime 写 0；暂停界面 ≤1 秒同步显示 0"</Description>
+          <LastState/>
+          <Color>00C000</Color>
+          <GroupHeader>1</GroupHeader>
+          <CheatEntries>
+            <CheatEntry>
+              <ID>1241</ID>
+              <Description>"GameTimer.CurrentTime（游玩时间, float 秒）——开启期间持续写 0 即为冻结在 0:00:00"</Description>
+              <LastState/>
+              <VariableType>Float</VariableType>
+              <Address>timer+1C</Address>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>1242</ID>
+              <Description>"GameTimer.m_waitTillSave（内部每秒刷新节流, float ∈[0,1]；只读校验用）"</Description>
+              <LastState/>
+              <VariableType>Float</VariableType>
+              <Address>timer+20</Address>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>1243</ID>
+              <Description>"GameTimer.m_sendTelemetryTimer（遥测发送计时, float ∈[0,60]；只读校验用）"</Description>
+              <LastState/>
+              <VariableType>Float</VariableType>
+              <Address>timer+24</Address>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>1244</ID>
+              <Description>"GameController.Timer 回指同一对象（[diffc?] 不适用；GameController.Instance 为早期对象，CE 定位不便，仅修改器内部使用）"</Description>
+              <LastState/>
+              <Color>808080</Color>
+              <GroupHeader>1</GroupHeader>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>1245</ID>
+              <Description>"⚠ CurrentTime 是累加器本身（FixedUpdate += deltaTime），直接写 0 即可，无需清 dirty；暂停界面 TimeCounterDisplay 每秒读 DisplayTimeAsString 同步"</Description>
+              <LastState/>
+              <Color>808080</Color>
+              <GroupHeader>1</GroupHeader>
+            </CheatEntry>
+          </CheatEntries>
+        </CheatEntry>
+
       </CheatEntries>
     </CheatEntry>
 
     <CheatEntry>
       <ID>1300</ID>
-      <Description>"【特殊能力】Ctrl+Shift+小键盘 1"</Description>
+      <Description>"【特殊功能】Ctrl+小键盘 5"</Description>
       <LastState/>
       <Color>C00000</Color>
       <GroupHeader>1</GroupHeader>
       <CheatEntries>
         <CheatEntry>
           <ID>1301</ID>
-          <Description>"Ctrl+Shift+1 一命保护 — 把 Difficulty 锁为 Normal(1)，**绝不触碰 LowestDifficulty**。⚠ 当前版本未能定位 DifficultyController，功能未生效"</Description>
+          <Description>"Ctrl+5 一命保护 — 把 Difficulty 锁为 Easy(0)（死亡不清档，且伤害减半/敌人血量×0.65）；**绝不触碰 LowestDifficulty**（成就判定字段）"</Description>
           <LastState/>
           <Color>C00000</Color>
           <GroupHeader>1</GroupHeader>
           <CheatEntries>
             <CheatEntry>
               <ID>1302</ID>
-              <Description>"DifficultyController.Difficulty（写法: diffc+18；0=Easy 1=Normal 2=Hard 3=OneLife）——可写"</Description>
+              <Description>"DifficultyController.Difficulty（写法: diffc+18；0=Easy 1=Normal 2=Hard 3=OneLife）——保护开启时被锁为 0；死亡判定读的就是它"</Description>
               <LastState/>
               <VariableType>4 Bytes</VariableType>
               <Address>diffc+18</Address>
             </CheatEntry>
             <CheatEntry>
               <ID>1303</ID>
-              <Description>"⛔ DifficultyController.LowestDifficulty（diffc+1C）——**只读！写它会毁掉一命通关成就资格**"</Description>
+              <Description>"⛔ DifficultyController.LowestDifficulty（diffc+1C）——**只读！写它会毁掉一命通关成就资格**；一命保护只在它为 OneLife(3) 时介入"</Description>
               <LastState/>
               <Color>C00000</Color>
               <VariableType>4 Bytes</VariableType>
               <Address>diffc+1C</Address>
+            </CheatEntry>
+            <CheatEntry>
+              <ID>1304</ID>
+              <Description>"难度=Easy 的额外效果: 非岩浆/尖刺伤害 ÷2、岩浆/尖刺特殊衰减、敌人血量 ×0.65（OneLife 与 Normal 走默认、伤害相同）"</Description>
+              <LastState/>
+              <Color>808080</Color>
+              <GroupHeader>1</GroupHeader>
             </CheatEntry>
           </CheatEntries>
         </CheatEntry>
@@ -599,6 +651,10 @@
     </SymbolEntry>
     <SymbolEntry>
       <Name>diffc</Name>
+      <Address>00000000</Address>
+    </SymbolEntry>
+    <SymbolEntry>
+      <Name>timer</Name>
       <Address>00000000</Address>
     </SymbolEntry>
   </UserdefinedSymbols>

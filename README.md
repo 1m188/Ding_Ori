@@ -19,17 +19,20 @@
 
 ## 使用
 
-1. 以管理员权限启动 `GoTrainer.exe`，在版本选择界面用 ↑↓/WS 选择，回车进入。
+1. 以管理员权限启动 `GoTrainer.exe`，在版本选择界面用 ↑↓ 选择，回车进入。
 2. 启动对应游戏并进入存档。修改器自动附加，约 **0.2–1 秒**内定位活体玩家对象
    （横向对比：早期版本是全堆扫描 9–15 秒，且经常定位失败）。
 3. ESC 可随时返回版本选择（仅在修改器窗口有焦点时生效）。
 
-## 热键（三档）
+## 热键（两档）
 
-键位分三档，每档内按顺序编号，**无空位、无重复**。三档互斥由"两个修饰键状态
-都要精确匹配"保证——按 Ctrl+Shift+N 时，小键盘 N 与 Ctrl+N 都不会被误触发。
+键位分两档，每档内按顺序编号，**无空位、无重复**。两档互斥由"修饰键状态精确
+匹配"保证——按 Ctrl+小键盘 N 时小键盘 N 不会触发；按住 Shift 时 Ctrl 档也不触发。
 
-**基础能力 —— 小键盘 1-9/0**
+> 为什么没有 Ctrl+Shift 档：Windows Terminal 默认把 `Ctrl+Shift+1..9` 绑成
+> "新建标签页"，会把按键在送到程序之前吃掉。详见维护手册 §8-23。
+
+**普通功能 —— 小键盘 1-9/0**
 
 | 热键 | 功能 | 状态 |
 |---|---|---|
@@ -41,27 +44,26 @@
 | 小键盘 6 | 无限二段跳 | ✓ 实测（同时开启二段跳能力） |
 | 小键盘 7 | 无限能力点数 | ✓ 实测（不足才补满，目标 99） |
 
-**进阶能力 —— Ctrl+小键盘 1..N**
+**特殊功能 —— Ctrl+小键盘 1..5**
 
 | 热键 | 功能 | 状态 |
 |---|---|---|
 | Ctrl+小键盘 1 | 死亡数归零 | ✓ 实测 |
 | Ctrl+小键盘 2 | 100% 探索 | ✓ 实测（区域完成度置 1） |
 | Ctrl+小键盘 3 | 解锁全部基础技能 | ✓ 实测（11 项，只给基础能力） |
-
-**特殊能力 —— Ctrl+Shift+小键盘 1..N**
-
-| 热键 | 功能 | 状态 |
-|---|---|---|
-| Ctrl+Shift+小键盘 1 | 一命保护 | ⚠ **未生效**（目标对象定位不到，见维护手册 §11） |
+| Ctrl+小键盘 4 | 重置时间 | ✓ 字段/写入已实测（`GameTimer.CurrentTime=0`）；暂停界面同步经源码确认 |
+| Ctrl+小键盘 5 | 一命保护（死亡不清档） | ✓ 实测（锁 `Difficulty=Easy`，死亡正常复活；`LowestDifficulty` 只读保留） |
 
 **界面按键（仅修改器窗口有焦点时生效）**
 
 | 键 | 作用 |
 |---|---|
-| ↑↓ / WS | 选择功能项 |
+| ↑↓ | 选择功能项 |
 | 回车 / 空格 | 激活或取消选中功能 |
-| HOME / F12 / F1 / ESC / END | 全关 / 重扫 / 帮助 / 返回版本选择 / 退出 |
+| HOME / F12 / F1 / ESC | 全关 / 重扫 / 帮助 / 返回版本选择 |
+
+> 没有"按键直接退出程序"：退出用窗口关闭按钮即可（END 曾绑定退出，已移除；
+> 原因见 §8-23）。版本选择界面也只有 ↑↓ + 回车，不含退出键。
 
 ## 功能语义
 
@@ -72,6 +74,13 @@
 - **100% 探索 / 解锁全部基础技能 = 一次性动作型**：开启期间维持，关闭不做任何事，
   再次开启仍会把缺的补上。
 - **死亡数归零 = 固定目标值**：无条件写 0，适合"无死亡通关"成就。
+- **重置时间 = 冻结在 0**：开启期间每周期把 `GameTimer.CurrentTime` 写 0，
+  游戏时间恒为 `0:00:00`；关闭后从 0 重新累计。暂停界面 "花费时间" 由
+  `TimeCounterDisplay` 每 1 秒读一次，故归零后最多 1 秒同步（详见 §7-13）。
+- **一命保护 = 只在"一命存档"上把 `Difficulty` 顶成 Easy**：死亡判定读的就是
+  这个字段，变成 Easy 后"清档链"整条不成立，死亡退化为普通复活；顺带享受 Easy
+  的伤害减半/敌人血量降低。**`LowestDifficulty`（成就判定字段）只读保留**。
+  关闭功能不还原难度（保护是粘性的，避免误关就恢复一命）。详见 §7-7。
 
 ---
 
@@ -196,11 +205,15 @@ SeinCharacter
 
 ### 3.3 独立单例（低区槽扫描）
 
-`SeinDeathCounter` / `GameWorld` 等单例的做法：扫低区（`< 0x10000000`）中"值能
-解析成目标类名"的槽位，缓存槽地址并在每周期重读；槽失效则清空重扫（带指数退避）。
+`SeinDeathCounter` / `GameWorld` / `GameTimer` 等单例的做法：扫低区（`< 0x10000000`）中
+"值能解析成目标类名"的槽位，缓存槽地址并在每周期重读；槽失效则清空重扫（带指数退避）。
 
-**注意**：`GameWorld` 能定位；`DifficultyController` / `GameTimer` / `GameController`
-**定位不到**（见 §11）。
+**注意**：
+- `GameWorld` / `SeinDeathCounter` / `GameTimer` / `DifficultyController` 都能定位；
+  但 `GameTimer` / `GameController` / `DifficultyController` 的对象在 `0x2A/0x2F`
+  段，低于 `minObjAddr(0x40000000)`，必须用 `minObjLowAddr` 下界才能扫到（见 §8-22）。
+- `GameController` 的静态槽也能扫到（`0x063D3D80 -> 0x2AC03C00`），只是修改器目前
+  不需要它；`GameController.Timer` 指向的 `GameTimer` 可直接用上面的方式拿到。
 
 ## §4 mono 元数据读取（怎么查字段偏移）
 
@@ -287,6 +300,22 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 > 把 `_items` 当元素首地址（`+i*4`）会让所有元素**错位 4 个**——既漏写后半段、
 > 又会把值写进数组类的元数据区（见 §8-20，实际踩过）。
 
+### GameTimer（游玩计时器）
+
+由 `GameTimer.Instance`（静态单例）或 `GameController.Timer(+0x14)` 定位；
+对象实测可能落在 `0x2Fxxxxxx` 段（低于常规托管堆下限 `0x40000000`，见 §8-22）。
+
+| 字段 | 偏移 | 说明 |
+|---|---|---|
+| CurrentTime | 0x1C | float 秒，累计游玩时间（`FixedUpdate += deltaTime`） |
+| m_waitTillSave | 0x20 | float ∈[0,1]，内部每秒刷新节流（**只读校验用**） |
+| m_sendTelemetryTimer | 0x24 | float ∈[0,60]，遥测发送计时（**只读校验用**） |
+
+> 暂停界面显示的"花费时间" = `GameTimer.DisplayTimeAsString`（由 `CurrentTime`
+> 派生，只显示分钟数）；`TimeCounterDisplay.Update()` 每 1 秒把它写进 GUIText。
+> 另有 `m_builder`（`GameTimer+0x14` 的 StringBuilder）保存 `H:MM:SS` 调试串，
+> 实测字符串与 `CurrentTime` 一致，是识别该字段的旁证。
+
 ### SeinSoulFlame
 
 | 字段 | 偏移 | 说明 |
@@ -363,7 +392,8 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 | 死亡数归零 | `death+14 = 0` | |
 | 100% 探索 | 遍历 `gw+18` 列表，元素从 `[_items]+0x10` 起，每个区域 `+14 = 1.0`、`+18 = 0` | 元素基址易错（§8-20）；只能解锁"完成地图"成就，不是"找齐秘密"（§7-6） |
 | 解锁全部基础技能 | 上表 11 个 `[playerab+偏移]+8 = 1` | 只写 1 字节；组件实例化见 §7-4 |
-| 一命保护 | `diffc+18 = 1` | ⚠ 目标对象定位不到，未生效（§11） |
+| 重置时间 | `timer+1C = 0.0` | 每周期写 = 冻结在 0；对象每周期从静态槽重读（`TimerAddr()`，换场景会重建） |
+| 一命保护 | `diffc+18 = 0`（Easy），仅当 `diffc+1C（LowestDifficulty）== OneLife` 时 | 死亡判定读 `Difficulty`，改它即可断掉清档链；**永不写 `+0x1C`**（成就判定字段）。见 §7-7 |
 
 所有执行器一律通过 `Runtime.Addrs()` / `SubAddr()` 取地址（内部加锁）——
 **不要直接读 Runtime 字段**，后台刷新会并发改写（§8-6）。
@@ -398,18 +428,34 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
      才给。**与地图百分比、与收集品都无关——100% 探索给不了它**，必须自己去穿墙。
    - 二段跳等"控制"作弊会影响成就资格的路子是 `CheatsHandler`，
      而技能树被动的 `HasAbility` 标志不属于该机制。
-7. **一命难度的清档链路**：`SeinDamageReciever` 依据
-   `DifficultyController.Instance.Difficulty == OneLife` 置 `WasKilled`；
-   之后 `currentSaveSlot.Difficulty == OneLife && WasKilled` → 清档。
-   成就只读 `LowestDifficulty`（所以保护方案是锁 `Difficulty`、**绝不碰
-   `LowestDifficulty`**）。
+7. **一命难度的清档链路**（"一命保护"实现依据）：
+   - 死亡时 `SeinDamageReciever.OnKill`：`if (DifficultyController.Instance.Difficulty
+     == OneLife) { CurrentSaveSlot.WasKilled = true; SaveGameController.PerformSave();
+     SaveSlotBackupsManager.DeleteAllBackups(); }`，随后 `OnKillRoutine` 再按同一个
+     条件决定弹 GameOver 还是普通复活。
+   - 真正清档发生在**下次读档**：`SaveWasOneLifeAndKilled => currentSaveSlot.Difficulty
+     == OneLife && currentSaveSlot.WasKilled` → `ClearSaveSlotForOneLife`。
+   - 所以**唯一闸门**是死亡那一刻的 `DifficultyController.Instance.Difficulty`。
+     把它顶成 `Easy(0)`，上述分支全不成立：不清档、不删备份、不弹 GameOver，
+     死亡退化为普通复活。
+   - **成就只看 `LowestDifficulty`**（`BeatOneLifeAchievementAsset`，`+0x1C`），
+     方案是锁 `Difficulty(+0x18)`、**绝不碰 `LowestDifficulty`**。
+   - 难度选择/伤害分支里只有 `Easy`/`Hard` 有特殊逻辑，`OneLife` 与 `Normal`
+     走默认；因此锁 Easy 顺带得到 Easy 的伤害减半/敌人血量 ×0.65，且
+     **一命与普通在伤害上本来就没有区别**。
+   - 副作用（已知并接受）：存档时 `SaveSlotInfo.FillData()` 会把控制器 Difficulty
+     抄进存档槽 → 槽内难度标签变成 Easy、并且 `SaveWasOneLifeAndKilled` 从此为假
+     （保护变"粘性"，关掉也仍不清档，直到从菜单"重开一命"）。
+     一命存档本来不允许复制（复制会删源槽），这一限制也会随之失效。
 8. **灵魂链接的两种操作**（同一按键）：轻点（0.3 秒内松开，
    `m_tapRemainingTime > 0`）→ 打开技能树；长按 → 就地建立链接。
    任何在轻点窗口内的蓄力写入都会破坏"轻点"语义。
 9. **能力点与升级**：`SeinLevel.LevelUp()` 会 `SkillPoints++` 并实例化
    `OnLevelUpGameObject`（升级特效）。持续写回固定点数会与它循环打架。
-10. **游玩时间**：`GameTimer.CurrentTime`（float 秒），挂在 `GameController.Timer`；
-    当前两个对象都定位不到（§11）。
+10. **游玩时间**：`GameTimer.CurrentTime`（float 秒，`GameTimer+0x1C`），
+    `GameController.Timer(+0x14)` 指向该对象；`GameTimer` 自身有静态单例
+    `GameTimer.Instance`，所以即使 `GameController` 定位不到也能直接定位计时器
+    （见 §3.3、§7-13）。
 11. **探索度**：`GameWorld.CompletionAmount` 是**派生值**（各
     `RuntimeGameWorldArea.m_completionAmount` 的平均），底层数据是"已访问地图面
     + 已发现图标"（`UpdateCompletionAmount`：`(visitedFaces + found) /
@@ -422,6 +468,18 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
     而 `SeinLevel.Current`（等级）只在 `LevelUp()` 里 `++`，**全新存档从未升级时
     它就是 0** → 技能树一直打不开、能力点花不出去。所以在存档点"轻点"想开技能树
     却没反应时，先查 `level+0x28` 是不是 0。
+13. **游玩计时器 GameTimer**（"重置时间"依据）：
+    - `FixedUpdate()` 里 `CurrentTime += Time.deltaTime`；主菜单 / 扩展标题界面 /
+      加载中会提前 `return`，**暂停时 `Time.timeScale=0 → deltaTime=0` 也不增长**。
+      所以"暂停界面看时间不动"是正常的，不代表字段找错。
+    - `Reset()` 就是 `CurrentTime = 0`；`Serialize()` 也序列化该字段（死亡/存档点
+      会把当前值写进存档）——直接写 0 与游戏自身语义一致。
+    - 暂停界面："花费时间"文本由 `TimeCounterDisplay.Update()` 每 1 秒读
+      `GameController.Instance.Timer.DisplayTimeAsString` 刷新，而
+      `DisplayTimeAsString` 完全由 `CurrentTime` 派生 → **写 0 后最多 1 秒同步**。
+    - 调试旁证：`m_builder`（`GameTimer+0x14` 的 StringBuilder）内容形如 `H:MM:SS`，
+      用于遥测；实测它与 `CurrentTime` 对得上（本次定位时读到 `0:03:30` ↔
+      `CurrentTime = 211.49s`）。
 
 ## §8 踩坑清单（现象 → 根因 → 修法）
 
@@ -472,9 +530,10 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
    （`ESC[?1049h`）与关闭自动换行（`ESC[?7l`），既不滚动也不残留。
 
 10. **键位撞车（发生过两次）**
-    → 功能表有 `NewFeature`（小键盘）/ `NewCtrlFeature`（Ctrl）/ `NewCtrlShiftFeature`
-    （Ctrl+Shift）三种构造器；把用错构造器的功能放到别的档位，就会与同数字的功能
-    同时触发（曾出现"无限二段跳"与"无限生命"、"无限能力点数"与"无限能量"）。
+    → 功能表有 `NewFeature`（小键盘）/ `NewCtrlFeature`（Ctrl）两种构造器；把用错
+    构造器的功能放到别的档位，就会与同数字的功能同时触发（曾出现"无限二段跳"与
+    "无限生命"、"无限能力点数"与"无限能量"）。一命保护是 `oneLife` 单例、不走
+    构造器，它的档位判断在 `main.go` 的 `handleDigit` 里单独写。
     → 修：用对构造器；**每次改完键位跑 `probe feats`**，它会打印键位表并自动检测重复。
 
 11. **解析器突然整体定位失败（连活体玩家都找不到）**
@@ -536,6 +595,43 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
     并在状态里提示"等级 0→1（技能树需等级>0）"。
     → 另注：技能树只在**存档点范围内轻点**（0.3 秒内松开）才开；长按是建立链接。
 
+22. **`GameTimer` / `GameController` / `DifficultyController` 死活定位不到
+    （"重置时间""一命保护"卡住的原因）**
+    → 这些对象在游戏**启动早期**就构造，实测落在 `0x2Axxxxxx / 0x2Fxxxxxx`
+    段，**低于 `minObjAddr = 0x40000000`**；而早期版本的 `classOf` 与低区槽扫描
+    都用 `isHeapPtr`（下界 `0x40000000`）做第一道过滤，于是候选对象在类名解析
+    之前就被丢掉了（`probe singleton GameTimer` 返回 0 槽位，`probe bases` 里
+    `diffc` 恒为 0）。
+    → 修：新增更低下界 `minObjLowAddr = 0x10000000` 与 `isObjPtrLow`，
+    `classOfMin(p, obj, min)` 允许下调下界；低区槽扫描对 `GameTimer` 用
+    "`+0x1C/+0x20/+0x24` 三个 float 取值区间"做便宜预筛，`DifficultyController`
+    用 "`+0x18/+0x1C` 两个 ∈[0,3] 的整数"做预筛，**且必须放在 `isHeapPtr`
+    那道下界门之前**（曾经只挪了 GameTimer、把 diff 留在门后，于是 diff 依旧找不到）。
+    → 定位手法（可复用）：`probe slotscan <类名> 0x063C0000 0x063E0000 0x10000`
+    直接扫 mono 静态字段块。本次看到 `GameTimer.Instance` `0x063DBAB8 -> 0x2FCD36B8`、
+    `DifficultyController.Instance` `0x063D3D20 -> 0x2FCD26A0`，以及同块的
+    `GameController.Instance`（`0x063D3D80 -> 0x2AC03C00`，其 `+0x14` 正好指向
+    同一个 GameTimer）。
+    → 教训：**"找不到对象"优先怀疑地址范围/对齐过滤，而不是对象不存在**；
+    一个类的静态块里往往同时住着好几个"定位不到"的单例；放宽过滤时要**成组检查**
+    所有同带对象，别只改当前那个。
+
+23. **按 Ctrl+Shift+小键盘 N，修改器"像退出了"（其实是被 Windows Terminal 吃掉）**
+    → 新终端（Windows Terminal 1.24）`defaults.json` 默认把
+    `ctrl+shift+1..9` 绑成 `Terminal.OpenNewTabProfile0..8`。**当修改器/终端窗口
+    有焦点时**，这个组合键在到达本程序之前就被 WT 拿去做"新建标签页"了——
+    屏幕切到新开的标签页，看起来就像修改器退出。实测：事件查看器无崩溃记录，
+    且游戏里 `Difficulty` 仍是 OneLife（说明按键根本没送到修改器）。
+    → 修（最终方案）：**放弃 Ctrl+Shift 档，全部收敛为两档**——普通功能用小键盘，
+    特殊功能用 Ctrl+小键盘；一命保护改为 **Ctrl+小键盘 5**（追加在 Ctrl 组末尾）。
+    曾试过 Ctrl+Shift+小键盘 1 → 0 也不行（WT 对这两条都不放行），所以不再在
+    Ctrl+Shift 上纠缠。同理 `ctrl+alt+1..9` 也被 WT 绑成切换标签页，不可用。
+    → 教训：**终端里的全局热键要避开终端宿主自身的默认键位**；换键后用
+    "按一下看功能状态有没有变"来确认按键确实到达了程序。
+    → 附带的坑：NumLock 关闭时小键盘1=END；而旧版本把 END 绑成"直接退出"
+    （`os.Exit(0)`），会让人误以为程序崩了。现已**移除所有"按键直接退出"**：
+    退出请用窗口关闭按钮。ESC 仅用于"返回版本选择"，不再是退出。
+
 ## §9 诊断工具 `probe`（等价 CE 的核心能力）
 
 全部命令都可加 `-vanilla` 切换到原版进程（`ori.exe`）。常用：
@@ -548,7 +644,10 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 | `feat <数字> [秒] [-ctrl] [-shift]` | 对活体进程运行**真实功能**并打印状态（`-ctrl`/`-shift` 对应档位） |
 | `offs <类名> <字段名...>` | **权威字段偏移**（从 mono 元数据读，等价 CE mono dissect） |
 | `heapfind <类名>` | 在堆区按类名枚举实例（确认某单例是否存在） |
-| `singleton <类名>` | 在低区找"指向该类实例的静态槽"（单例定位） |
+| `singleton <类名> [minObj]` | 在低区找"指向该类实例的静态槽"（单例定位；可下调对象下界） |
+| `slotscan <类名> <lo> <hi> [minObj]` | 在指定地址范围内找"指向该类实例的槽位"（**定位早期对象/静态块首选**，如 `slotscan GameTimer 0x063C0000 0x063E0000 0x10000`） |
+| `timer` | 用修改器自身的解析器定位 `GameTimer` 并打印 `CurrentTime`/节流字段（验证"重置时间"） |
+| `onelife [秒]` | 端到端验证"一命保护"：定位难度控制器 → 激活保护 → tick → 打印状态/字段 → 关闭并还原 `Difficulty`（`LowestDifficulty` 全程只读） |
 | `struct <地址> [字数]` | 转储对象字段并标注指针目标类名 |
 | `read/write <地址> <类型> <值>` | 原始读写（类型支持 i8/i16/i32/u32/f32/f64） |
 | `fields2 <类名>` | 遍历 klass 的字段数组直出（备用） |
@@ -587,42 +686,34 @@ probe feats     → 键位表 + "无重复 ✓"
    - 原版相关改动若未实测，**必须在 `ori_vanilla.ct` 里标注"未核验"**。
 8. **提交**：说明"现象→根因→修法"，便于回溯。
 
-键位分配规则：**优先小键盘 1-9/0；放不下的接 Ctrl+小键盘 1..N；特殊能力用
-Ctrl+Shift+小键盘**。每档内顺序编号、不留空位。
+键位分配规则（**只有两档**）：普通功能用**小键盘 1-9/0**；特殊功能用
+**Ctrl+小键盘 1..N**（含一命保护，排最后）。每档内顺序编号、不留空位。
+不再使用 Ctrl+Shift 档（原因见 §8-23）。
 
 **界面显示顺序必须与键位复杂度一致**（从一般到特殊）：
 
 ```
-小键盘（基础能力） → Ctrl+小键盘（进阶能力） → Ctrl+Shift+小键盘（特殊能力）
+小键盘（普通功能） → Ctrl+小键盘（特殊功能）
 ```
 
 功能表（`features.go` 的 `BuildFeatures`）按这个顺序排列；一命保护这类"最特殊"的
-功能由 `main.go` 的 `navList` **追加到列表末尾**——不要再把它插进中间档位之间
+功能由 `main.go` 的 `navList` **追加到列表末尾**——不要再把它插进中间
 （曾经它被插在小键盘组和 Ctrl 组之间，与"由简到繁"的顺序不一致）。
 `probe feats` 会自动检查这一点（输出"顺序检查: 档位由简到繁 ✓"）。
 
 ## §11 未解决 / 待办
 
-**重置时间** 与 **一命保护** 都卡在同一个问题上：目标对象定位不到。
-
-- 时间载体：`GameTimer.CurrentTime`（float 秒），挂在 `GameController.Timer` 上。
-- 一命保护载体：`DifficultyController`。
-- 现状：`GameController` / `GameTimer` / `DifficultyController` 在运行中的进程里
-  **都找不到活体实例**——全堆无过滤扫描（`probe heapfind`）只找到过若干
-  `DifficultyController` 名字的孤立/垃圾对象（`probe allrefs` 显示**全内存零引用**），
-  说明 `Instance` 静态字段并没有指向一个可定位的实例。
-- **已找到的可行线索**：
-  `SaveSceneManager`（**可以定位**，低区静态槽）持有 `List<SaveId> SaveData`(+0x10)，
-  每项的 `SaveObject` 就是**游戏全部可存档对象**——`GameTimer` /
-  `DifficultyController` / `GameController` 应该都在其中。顺着这个列表枚举并回读
-  类名，即可取出它们，从而一次解决两个功能。
-  相关源码：`SaveSceneManager.SaveData`、`SaveId.Id/SaveObject`。
-
 **原版（ori.exe）**：字段偏移全部未核验，功能未实测。核验路径见 `ori_vanilla.ct`
-的注释（`probe offs ... -vanilla`）。
+的注释（`probe offs ... -vanilla`、`probe timer -vanilla`、`probe onelife -vanilla`）。
 
-**探针/脚本的小限制**：`probe` 的部分命令（`singleton`/`diffobj` 等）是围绕终极版
+**探针/脚本的小限制**：`probe` 的部分命令（`heapfind`/`singleton` 等）是围绕终极版
 观察写的，用于原版前应先跑 `diag -vanilla` 确认定位链路可用。
+
+**已全部完成**（历史记录）：
+- **重置时间**：`GameTimer.Instance` 静态槽定位，写 `+0x1C=0`，Ctrl+小键盘 4（§7-13）。
+- **一命保护**：`DifficultyController.Instance` 静态槽定位（早期曾因下界过滤误判为
+  "不存在"，见 §8-22），仅在 `LowestDifficulty==OneLife` 时把 `Difficulty` 顶成
+  Easy，Ctrl+小键盘 5（§7-7）。
 
 ## §12 资料与来源
 
