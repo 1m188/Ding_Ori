@@ -341,43 +341,34 @@ type navEntry struct {
 	status string
 }
 
-// navList 按显示顺序构建导航项：
-// 小键盘 1-9/0 各功能 → 一命保护（Ctrl+小键盘 1）→ 其余 Ctrl+小键盘 功能。
+// navList 按显示顺序构建导航项。
+//
+// 顺序 = 功能从"普通"到"特殊"：
+//
+//	小键盘 1-9/0（基础能力）→ Ctrl+小键盘（进阶能力）→ Ctrl+Shift+小键盘（特殊能力）
+//
+// 功能表本身已按这个顺序排列，一命保护（Ctrl+Shift+小键盘 1）**追加到最后**。
+// 注意不要再把它插到 Ctrl 组之前：那会让"最特殊"的功能夹在两组之间，
+// 与键位从简单到复杂的顺序不一致。
 func navList(s *session) []navEntry {
 	if s == nil {
 		return nil
 	}
-	ol := ori.OneLife()
-	olEntry := navEntry{
-		label:  ori.OneLifeHotkeyLabel(),
-		name:   ol.Name(),
-		active: ol.Active(),
-		status: ol.Status(),
-	}
-	var out []navEntry
+	out := make([]navEntry, 0, len(s.feats)+1)
 	for _, f := range s.feats {
-		// 一命保护插在第一个 Ctrl 项之前（即小键盘组之后）
-		if f.NeedCtrl && olEntry.feat == nil && !hasOneLife(out) {
-			out = append(out, olEntry)
-		}
 		out = append(out, navEntry{
 			feat: f, label: f.HotkeyLabel(), name: f.Name,
 			active: f.Active(), status: f.Status(),
 		})
 	}
-	if !hasOneLife(out) {
-		out = append(out, olEntry)
-	}
+	ol := ori.OneLife()
+	out = append(out, navEntry{
+		label:  ori.OneLifeHotkeyLabel(),
+		name:   ol.Name(),
+		active: ol.Active(),
+		status: ol.Status(),
+	})
 	return out
-}
-
-func hasOneLife(list []navEntry) bool {
-	for _, e := range list {
-		if e.feat == nil {
-			return true
-		}
-	}
-	return false
 }
 
 // navToggle 切换第 idx 个导航项。

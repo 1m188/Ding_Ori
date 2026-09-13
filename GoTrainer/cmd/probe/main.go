@@ -2211,31 +2211,57 @@ func cmdBases(p *core.Process) {
 //	probe feats
 func cmdFeats() {
 	fs := ori.BuildFeatures()
-	fmt.Printf("共 %d 项功能（含一命保护共 %d 项）:\n", len(fs), len(fs)+1)
-	seen := map[string]bool{}
-	dup := 0
+	fmt.Printf("共 %d 项功能（含一命保护共 %d 项）：\n", len(fs), len(fs)+1)
+	fmt.Println("  界面顺序 = 从一般到特殊：小键盘 → Ctrl+小键盘 → Ctrl+Shift+小键盘")
+
+	type row struct {
+		label, name string
+		tier        int
+	}
+	tierOf := func(ctrl, shift bool) int {
+		switch {
+		case ctrl && shift:
+			return 2
+		case ctrl:
+			return 1
+		default:
+			return 0
+		}
+	}
+	rows := make([]row, 0, len(fs)+1)
 	for _, f := range fs {
-		label := f.HotkeyLabel()
+		rows = append(rows, row{f.HotkeyLabel(), f.Name, tierOf(f.NeedCtrl, f.NeedShift)})
+	}
+	// 一命保护不在 feats 中，界面上追加在最后（属 Ctrl+Shift 档）
+	rows = append(rows, row{ori.OneLifeHotkeyLabel(), ori.OneLife().Name(), 2})
+
+	tierName := []string{"小键盘", "Ctrl+小键盘", "Ctrl+Shift+小键盘"}
+	seen := map[string]bool{}
+	dup, orderBad, prevTier := 0, 0, -1
+	for _, r := range rows {
 		mark := ""
-		if seen[label] {
-			mark = "   <== 键位重复!"
+		if seen[r.label] {
+			mark += "   <== 键位重复!"
 			dup++
 		}
-		seen[label] = true
-		fmt.Printf("  %-16s %s%s\n", label, f.Name, mark)
+		seen[r.label] = true
+		if r.tier < prevTier {
+			mark += "   <== 顺序错误（应按档位由简到繁）!"
+			orderBad++
+		}
+		prevTier = r.tier
+		fmt.Printf("  %-18s %-14s %s%s\n", r.label, tierName[r.tier], r.name, mark)
 	}
-	olLabel := ori.OneLifeHotkeyLabel()
-	mark := ""
-	if seen[olLabel] {
-		mark = "   <== 键位重复!"
-		dup++
-	}
-	seen[olLabel] = true
-	fmt.Printf("  %-16s %s%s\n", olLabel, ori.OneLife().Name(), mark)
+
 	if dup == 0 {
 		fmt.Println("键位检查: 无重复 ✓")
 	} else {
 		fmt.Printf("键位检查: 发现 %d 处重复 ✗\n", dup)
+	}
+	if orderBad == 0 {
+		fmt.Println("顺序检查: 档位由简到繁 ✓")
+	} else {
+		fmt.Printf("顺序检查: 发现 %d 处逆序 ✗\n", orderBad)
 	}
 }
 
