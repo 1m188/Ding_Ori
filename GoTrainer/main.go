@@ -461,8 +461,7 @@ func renderSelector(a *app) {
 func renderTrainer(a *app, s *session) {
 	var b strings.Builder
 
-	b.WriteString(cTitle + "  奥日与迷失森林 — " + s.prof.ShortName + "修改器 (" + s.prof.ProcessName + ")" + cReset +
-		cDim + "    [ESC] 返回版本选择" + cReset + "\n")
+	b.WriteString(cTitle + "  奥日与迷失森林 — " + s.prof.ShortName + "修改器 (" + s.prof.ProcessName + ")" + cReset + "\n")
 	b.WriteString(cBox + "  ────────────────────────────────────────────────────────\n" + cReset)
 
 	snap := s.r.Read()
