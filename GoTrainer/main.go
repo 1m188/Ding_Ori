@@ -481,7 +481,7 @@ func renderSelector(a *app) {
 func renderTrainer(a *app, s *session) {
 	var b strings.Builder
 
-	b.WriteString(cTitle + "  奥日与黑暗森林 — " + s.prof.DisplayName + " 修改器" + cReset +
+	b.WriteString(cTitle + "  奥日与黑暗森林 — " + s.prof.ShortName + "修改器 (" + s.prof.ProcessName + ")" + cReset +
 		cDim + "    [ESC] 返回版本选择" + cReset + "\n")
 	b.WriteString(cBox + "  ────────────────────────────────────────────────────────\n" + cReset)
 

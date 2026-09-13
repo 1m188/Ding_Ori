@@ -45,12 +45,13 @@ type Profile struct {
 	Version     Version
 	ProcessName string
 	DisplayName string
+	ShortName   string // 短名（"终极版"/"原版"），供修改器标题拼装
 }
 
 // Profiles 版本 -> 目标信息。
 var Profiles = map[Version]Profile{
-	Vanilla:    {Vanilla, "ori.exe", "原版 (ori.exe)"},
-	Definitive: {Definitive, "oriDE.exe", "终极版 (oriDE.exe)"},
+	Vanilla:    {Vanilla, "ori.exe", "原版 (ori.exe)", "原版"},
+	Definitive: {Definitive, "oriDE.exe", "终极版 (oriDE.exe)", "终极版"},
 }
 
 // 字段偏移（两版一致，字节）。
