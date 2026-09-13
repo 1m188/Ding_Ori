@@ -141,6 +141,8 @@ func main() {
 		cmdStaticMap(p)
 	case "singleton":
 		cmdSingleton(p)
+	case "slotscan":
+		cmdSlotScan(p)
 	case "objof":
 		cmdObjOf(p)
 	case "offs":
@@ -187,6 +189,10 @@ func main() {
 		cmdClass(p)
 	case "live":
 		cmdLive(p)
+	case "timer":
+		cmdTimer(p)
+	case "onelife":
+		cmdOneLife(p)
 	default:
 		usage()
 	}
@@ -1683,7 +1689,16 @@ func cmdObjOf(p *core.Process) {
 // u32(klass)==klass）。自指校验可排除堆上垃圾数据凑出的假 klass。
 // vtable 允许位于元数据带（纯托管类）或堆带（MonoBehaviour 派生类）。
 func classOf(p *core.Process, obj uint32) (string, uint32, bool) {
-	if obj < 0x40000000 || obj >= 0xFFFF0000 {
+	return classOfMin(p, obj, 0x40000000)
+}
+
+// classOfMin 同 classOf，但允许对象落在 min 以上的任意地址。
+//
+// 早期创建的对象（如 GameController/GameTimer，在过场/启动期就构造）
+// 可能位于 0x40000000 以下，用 classOf 会被下限直接拒掉；
+// 需要放宽下限时用本函数（vtable/klass 仍要求 >= 0x08000000）。
+func classOfMin(p *core.Process, obj, min uint32) (string, uint32, bool) {
+	if obj < min || obj >= 0xFFFF0000 {
 		return "", 0, false
 	}
 	vt, ok := p.ReadU32(obj)
@@ -1842,12 +1857,143 @@ func cmdStrRef(p *core.Process) {
 // findSingleton 在 mono 静态数据带（低区）中查找存放指定类型实例的槽位。
 //
 //	probe singleton <ClassName>
+//
+// cmdSlotScan 在指定地址范围内查找"指向某类实例"的槽位。
+//
+//	probe slotscan <ClassName> <loHex> <hiHex> [minObjHex]
+//
+// 与 singleton 的区别：范围显式给定（典型用途：mono 类静态字段块
+// 0x063C0000-0x063E0000），且 minObj 可下调到 0x10000，用于定位
+// GameController/GameTimer 这类在启动早期、可能落在 0x40000000 以下的实例。
+func cmdSlotScan(p *core.Process) {
+	if len(os.Args) < 5 {
+		fmt.Println("usage: probe slotscan <ClassName> <loHex> <hiHex> [minObjHex]")
+		return
+	}
+	name := os.Args[2]
+	lo := uint32(parseHex(os.Args[3]))
+	hi := uint32(parseHex(os.Args[4]))
+	minObj := uint32(0x40000000)
+	if len(os.Args) >= 6 {
+		minObj = uint32(parseHex(os.Args[5]))
+	}
+	if hi <= lo || hi-lo > 64<<20 {
+		fmt.Println("bad range (需 lo<hi 且跨度<=64MB)")
+		return
+	}
+	buf := make([]byte, hi-lo)
+	if !p.ReadBytes(lo, buf) {
+		fmt.Println("读取范围失败")
+		return
+	}
+	t0 := time.Now()
+	n := 0
+	for off := 0; off+4 <= len(buf); off += 4 {
+		v := u32atb(buf, off)
+		if v < minObj || v >= 0xFFFF0000 || v&3 != 0 {
+			continue
+		}
+		if nm, k, ok := classOfMin(p, v, minObj); ok && nm == name {
+			n++
+			fmt.Printf("  slot 0x%08X -> 0x%08X klass=0x%08X\n", lo+uint32(off), v, k)
+			dumpFields(p, v, 0x60)
+		}
+	}
+	fmt.Printf("slotscan %q [0x%08X,0x%08X) minObj=0x%08X -> %d 槽位 [%.2fs]\n",
+		name, lo, hi, minObj, n, time.Since(t0).Seconds())
+}
+
+// cmdTimer 用修改器自身的解析逻辑定位 GameTimer 并打印计时字段。
+//
+//	probe timer
+func cmdTimer(p *core.Process) {
+	prof := probeProfile()
+	rt := &ori.Runtime{Prof: &prof}
+	rt.SetProcess(p)
+	var a uint32
+	for i := 0; i < 24; i++ {
+		rt.Refresh()
+		a = rt.TimerAddr()
+		if a != 0 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if a == 0 {
+		fmt.Println("未定位到 GameTimer（需先进入存档）")
+		return
+	}
+	cur, _ := p.ReadF32(a + ori.OffTimerCurrentTime)
+	wait, _ := p.ReadF32(a + ori.OffTimerWaitTillSave)
+	tele, _ := p.ReadF32(a + ori.OffTimerTelemetry)
+	fmt.Printf("GameTimer = 0x%08X\n", a)
+	fmt.Printf("  CurrentTime          +0x%02X = %.3f s  (%s)\n", ori.OffTimerCurrentTime, cur, ori.FormatGameTime(cur))
+	fmt.Printf("  m_waitTillSave       +0x%02X = %.3f  (期望 0..1)\n", ori.OffTimerWaitTillSave, wait)
+	fmt.Printf("  m_sendTelemetryTimer +0x%02X = %.3f  (期望 0..60)\n", ori.OffTimerTelemetry, tele)
+}
+
+// cmdOneLife 端到端验证"一命保护"：
+// 用修改器自身的解析器定位 DifficultyController → 激活一命保护 → tick 数秒
+// → 打印状态 → 关闭并把 Difficulty 还原（LowestDifficulty 全程只读）。
+//
+//	probe onelife [seconds]
+func cmdOneLife(p *core.Process) {
+	secs := 3
+	if len(os.Args) >= 3 {
+		if n, err := strconv.Atoi(os.Args[2]); err == nil {
+			secs = n
+		}
+	}
+	prof := probeProfile()
+	rt := &ori.Runtime{Prof: &prof}
+	rt.SetProcess(p)
+	var addr uint32
+	ok := false
+	for i := 0; i < 24; i++ {
+		rt.Refresh()
+		if addr, ok = rt.DiffAddress(); ok {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if !ok {
+		fmt.Println("未定位到 DifficultyController（需先进入存档）")
+		return
+	}
+	lowOff := uint32(ori.OffDiffLowest - ori.OffDiffDifficulty)
+	orig, _ := p.ReadI32(addr)
+	low, _ := p.ReadI32(addr + lowOff)
+	fmt.Printf("DifficultyController @ 0x%08X: Difficulty(+%02X)=%d  LowestDifficulty(+%02X)=%d\n",
+		addr-ori.OffDiffDifficulty, ori.OffDiffDifficulty, orig, ori.OffDiffLowest, low)
+
+	ol := ori.OneLife()
+	ol.SetActive(true)
+	deadline := time.Now().Add(time.Duration(secs) * time.Second)
+	for time.Now().Before(deadline) {
+		ori.TickAll(rt)
+		time.Sleep(50 * time.Millisecond)
+	}
+	now, _ := p.ReadI32(addr)
+	lowNow, _ := p.ReadI32(addr + lowOff)
+	fmt.Printf("保护状态: %s\n", ol.Status())
+	fmt.Printf("测试后: Difficulty=%d  LowestDifficulty=%d\n", now, lowNow)
+
+	ol.SetActive(false)
+	if p.WriteI32(addr, orig) {
+		fmt.Printf("已还原 Difficulty=%d（LowestDifficulty 全程未动）\n", orig)
+	}
+}
+
 func cmdSingleton(p *core.Process) {
 	if len(os.Args) < 3 {
-		fmt.Println("usage: probe singleton <ClassName>")
+		fmt.Println("usage: probe singleton <ClassName> [minObjHex]")
 		return
 	}
 	target := os.Args[2]
+	minObj := uint32(0x40000000)
+	if len(os.Args) >= 4 {
+		minObj = uint32(parseHex(os.Args[3]))
+	}
 	t0 := time.Now()
 	type hit struct{ at, val uint32 }
 	var hits []hit
@@ -1867,16 +2013,16 @@ func cmdSingleton(p *core.Process) {
 			}
 			for off := 0; off+4 <= int(sz); off += 4 {
 				v := u32atb(buf, off)
-				if v < 0x40000000 || v >= 0xFFFF0000 || v&3 != 0 {
+				if v < minObj || v >= 0xFFFF0000 || v&3 != 0 {
 					continue
 				}
-				if nm, _, ok := classOf(p, v); ok && nm == target {
+				if nm, _, ok := classOfMin(p, v, minObj); ok && nm == target {
 					hits = append(hits, hit{uint32(base) + uint32(off), v})
 				}
 			}
 		}
 	}
-	fmt.Printf("singleton %q -> %d 槽位 [%.2fs]\n", target, len(hits), time.Since(t0).Seconds())
+	fmt.Printf("singleton %q -> %d 槽位 (minObj=0x%08X) [%.2fs]\n", target, len(hits), minObj, time.Since(t0).Seconds())
 	for _, h := range hits {
 		fmt.Printf("  slot 0x%08X -> 0x%08X\n", h.at, h.val)
 		dumpFields(p, h.val, 0x60)
@@ -2152,7 +2298,7 @@ func cmdBases(p *core.Process) {
 	}
 	// 附属单例是后台异步定位的，等一会儿
 	for i := 0; i < 12; i++ {
-		if rt.DeathCounterAddr() != 0 && rt.GameWorldAddr() != 0 {
+		if rt.DeathCounterAddr() != 0 && rt.GameWorldAddr() != 0 && rt.TimerAddr() != 0 {
 			break
 		}
 		time.Sleep(time.Second)
@@ -2169,7 +2315,7 @@ func cmdBases(p *core.Process) {
 	mor := rd(sein + ori.OffSeinMortality)
 	names := []string{
 		"sein", "abilities", "level", "energy", "mortality", "health",
-		"soulflame", "jump", "doublejump", "playerab", "death", "gw", "diffc",
+		"soulflame", "jump", "doublejump", "playerab", "death", "gw", "diffc", "timer",
 	}
 	vals := []uint32{
 		sein,
@@ -2185,6 +2331,7 @@ func cmdBases(p *core.Process) {
 		rt.DeathCounterAddr(),
 		rt.GameWorldAddr(),
 		rt.SubAddr("diff"),
+		rt.TimerAddr(),
 	}
 	if asXML {
 		fmt.Println("  <UserdefinedSymbols>")
@@ -2212,7 +2359,7 @@ func cmdBases(p *core.Process) {
 func cmdFeats() {
 	fs := ori.BuildFeatures()
 	fmt.Printf("共 %d 项功能（含一命保护共 %d 项）：\n", len(fs), len(fs)+1)
-	fmt.Println("  界面顺序 = 从一般到特殊：小键盘 → Ctrl+小键盘 → Ctrl+Shift+小键盘")
+	fmt.Println("  界面顺序 = 从一般到特殊：小键盘 → Ctrl+小键盘")
 
 	type row struct {
 		label, name string
@@ -2232,8 +2379,8 @@ func cmdFeats() {
 	for _, f := range fs {
 		rows = append(rows, row{f.HotkeyLabel(), f.Name, tierOf(f.NeedCtrl, f.NeedShift)})
 	}
-	// 一命保护不在 feats 中，界面上追加在最后（属 Ctrl+Shift 档）
-	rows = append(rows, row{ori.OneLifeHotkeyLabel(), ori.OneLife().Name(), 2})
+	// 一命保护不在 feats 中，界面上追加在最后（属 Ctrl+小键盘 档）
+	rows = append(rows, row{ori.OneLifeHotkeyLabel(), ori.OneLife().Name(), 1})
 
 	tierName := []string{"小键盘", "Ctrl+小键盘", "Ctrl+Shift+小键盘"}
 	seen := map[string]bool{}
