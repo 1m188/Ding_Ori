@@ -14,15 +14,20 @@ import (
 // Feature 一个可开关的功能。
 //
 // 键位约定（只用小键盘，避免与笔记本键盘的 F 键/主键盘区冲突）:
-//   - NeedCtrl=false: 小键盘数字键 Digit（1..9, 0）
-//   - NeedCtrl=true : Ctrl + 小键盘数字键 Digit
+//   - NeedCtrl=false, NeedShift=false: 小键盘数字键 Digit（1..9, 0）
+//   - NeedCtrl=true,  NeedShift=false: Ctrl + 小键盘数字键 Digit
+//   - NeedCtrl=true,  NeedShift=true : Ctrl+Shift + 小键盘数字键 Digit
+//
+// 三档互斥由"两个修饰键状态都要精确匹配"保证:
+// 按 Ctrl+Shift+N 时 NeedCtrl=false 的功能不会触发（false != true）。
 //
 // 另支持"前台导航"：修改器窗口在前台时，用 ↑↓ 选择、回车/空格切换
 // （见 UI 层的 navCursor），供没有小键盘的键盘使用。
 type Feature struct {
-	Digit    int  // 1..9 或 0（小键盘数字键 0）
-	NeedCtrl bool // 是否需按住 Ctrl
-	Name     string
+	Digit     int  // 1..9 或 0（小键盘数字键 0）
+	NeedCtrl  bool // 是否需按住 Ctrl
+	NeedShift bool // 是否需按住 Shift
+	Name      string
 
 	// FixedTarget 非 nil 表示"固定目标值"模式（UI 显示用）
 	FixedTarget *int32
@@ -48,12 +53,23 @@ func NewCtrlFeature(digit int, name string) *Feature {
 	return f
 }
 
+// NewCtrlShiftFeature Ctrl+Shift + 小键盘数字键功能（特殊能力）。
+func NewCtrlShiftFeature(digit int, name string) *Feature {
+	f := &Feature{Digit: digit, NeedCtrl: true, NeedShift: true, Name: name}
+	f.status.Store("未激活")
+	return f
+}
+
 // HotkeyLabel 键位显示文本。
 func (f *Feature) HotkeyLabel() string {
-	if f.NeedCtrl {
+	switch {
+	case f.NeedCtrl && f.NeedShift:
+		return fmt.Sprintf("Ctrl+Shift+小键盘 %d", f.Digit)
+	case f.NeedCtrl:
 		return fmt.Sprintf("Ctrl+小键盘 %d", f.Digit)
+	default:
+		return fmt.Sprintf("小键盘 %d", f.Digit)
 	}
-	return fmt.Sprintf("小键盘 %d", f.Digit)
 }
 
 // Active 是否激活。
@@ -698,78 +714,6 @@ func (g *multiFloatMul) OnDeactivate(r *Runtime) {
 	}
 }
 
-// ---------- 满生命球 / 满能量球 ----------
-
-// refillTo 把"上限字段"补到目标值，并把当前值补满；已达上限则不再改动。
-//
-// 用于"满生命球""满能量球"这类需求: 补到满、已满则不动（幂等）。
-type refillTo struct {
-	f        *Feature
-	getMax   func(r *Runtime) (uint32, bool) // 上限字段
-	getCur   func(r *Runtime) (uint32, bool) // 当前值字段（写入用，float）
-	maxIsInt bool                            // 上限是否为 int32
-	target   float32                         // 目标上限（int 时为内部点数）
-	divisor  float32                         // 显示换算（生命: 点数/4 = 球数）
-	unit     string
-	didWrite bool // 本次激活期间是否写过（用于状态显示）
-}
-
-func (g *refillTo) Tick(r *Runtime) {
-	if !g.f.Active() {
-		return
-	}
-	maxAddr, ok := g.getMax(r)
-	if !ok {
-		g.f.setStatus("地址解析失败")
-		return
-	}
-	var cur float32
-	if g.maxIsInt {
-		v, ok2 := r.Proc.ReadI32(maxAddr)
-		if !ok2 {
-			g.f.setStatus("读取上限失败")
-			return
-		}
-		cur = float32(v)
-	} else {
-		v, ok2 := r.Proc.ReadF32(maxAddr)
-		if !ok2 {
-			g.f.setStatus("读取上限失败")
-			return
-		}
-		cur = v
-	}
-	d := g.divisor
-	if d <= 0 {
-		d = 1
-	}
-	if cur >= g.target {
-		// 已达标: 若本次激活期间补过，显示补满结果（避免"明明补上了却只看到已达上限"）
-		if g.didWrite {
-			g.f.setStatus(fmt.Sprintf("已补满到 %g%s", g.target/d, g.unit))
-		} else {
-			g.f.setStatus(fmt.Sprintf("已达上限（%g%s）", cur/d, g.unit))
-		}
-		return
-	}
-	g.didWrite = true
-	if g.maxIsInt {
-		if !r.Proc.WriteI32(maxAddr, int32(g.target)) {
-			g.f.setStatus("写入上限失败")
-			return
-		}
-	} else {
-		if !r.Proc.WriteF32(maxAddr, g.target) {
-			g.f.setStatus("写入上限失败")
-			return
-		}
-	}
-	if addr, ok3 := g.getCur(r); ok3 {
-		r.Proc.WriteF32(addr, g.target)
-	}
-	g.f.setStatus(fmt.Sprintf("已补满到 %g%s", g.target/d, g.unit))
-}
-
 // ---------- 100% 探索 ----------
 
 // explore100 把所有已加载区域的完成度置为 1（即 100%）。
@@ -1081,29 +1025,19 @@ func BuildFeatures() []*Feature {
 		allTickers = append(allTickers, &infiniteDoubleJump{f: f})
 		return f
 	}
-	// 能力点数: 不足才补满（见 setIntMin 说明）。Ctrl 位功能。
+	// 能力点数: 不足才补满（见 setIntMin 说明）。
 	newIntMin := func(digit int, name string, get func(*Runtime) (uint32, bool), target int32) *Feature {
-		f := NewCtrlFeature(digit, name)
+		f := NewFeature(digit, name)
 		allTickers = append(allTickers, &setIntMin{f: f, get: get, target: target})
 		return f
 	}
-	// 满生命球 / 满能量球（见 refillTo 说明）
-	newRefillTo := func(digit int, name string, getMax, getCur func(*Runtime) (uint32, bool),
-		maxIsInt bool, target, divisor float32) *Feature {
-		f := NewFeature(digit, name)
-		allTickers = append(allTickers, &refillTo{
-			f: f, getMax: getMax, getCur: getCur,
-			maxIsInt: maxIsInt, target: target, divisor: divisor, unit: " 球",
-		})
-		return f
-	}
 	newGrantAll := func(digit int) *Feature {
-		f := NewFeature(digit, "获得所有技能")
+		f := NewCtrlFeature(digit, "获得所有技能")
 		allTickers = append(allTickers, &grantAllAbilities{f: f})
 		return f
 	}
 	newExplore100 := func(digit int) *Feature {
-		f := NewFeature(digit, "100% 探索")
+		f := NewCtrlFeature(digit, "100% 探索")
 		allTickers = append(allTickers, &explore100{f: f})
 		return f
 	}
@@ -1124,22 +1058,26 @@ func BuildFeatures() []*Feature {
 	// 溢出部分再用 Ctrl+小键盘。一命保护占用 Ctrl+小键盘 1（见 oneLife 单例）。
 
 	return []*Feature{
-		// ===== 小键盘 1-9/0（严格顺序编号，无空位、无重复）=====
+		// ===== 基础能力: 小键盘 1-9/0（顺序编号）=====
 		newRefill(1, "无限生命", hp, hpMax, true, HealthPointsPerCell, " 球"),
 		newRefill(2, "无限能量", en, enMax, false, 1, ""),
-		newRefillTo(3, "满生命球", hpMax, hp, true, MaxHealthCells*HealthPointsPerCell, HealthPointsPerCell),
-		newRefillTo(4, "满能量球", enMax, en, false, MaxEnergyCells, 1),
-		newGrantAll(5),
-		newExplore100(6),
-		newZeroFloat(7, "灵魂链接无需冷却", soulCd),
-		newSoulFlameAnywhere(8),
-		newSuperJump(9, 2.5),
-		newInfiniteDoubleJump(0),
-		// ===== Ctrl+小键盘（顺序接续；Ctrl+2 为一命保护，见 oneLife）=====
-		newIntMin(1, "无限能力点数", lvlSP, 999),
-		newCtrlCounterLock(3, "死亡数归零", deaths, 0),
+		newZeroFloat(3, "灵魂链接无需冷却", soulCd),
+		newSoulFlameAnywhere(4),
+		newSuperJump(5, 2.5),
+		newInfiniteDoubleJump(6),
+		newIntMin(7, "无限能力点数", lvlSP, 99),
+		// ===== 进阶能力: Ctrl+小键盘（顺序接续）=====
+		newCtrlCounterLock(1, "死亡数归零", deaths, 0),
+		newExplore100(2),
+		newGrantAll(3),
+		// ===== 特殊能力: Ctrl+Shift+小键盘 1（一命保护，见 oneLife）=====
 	}
 }
 
-// CtrlOneLifeDigit 一命保护的键位（Ctrl+小键盘 2）。
-const CtrlOneLifeDigit = 2
+// CtrlOneLifeDigit 一命保护的键位（Ctrl+Shift+小键盘 1）。
+const CtrlOneLifeDigit = 1
+
+// OneLifeHotkeyLabel 一命保护的键位显示文本。
+func OneLifeHotkeyLabel() string {
+	return fmt.Sprintf("Ctrl+Shift+小键盘 %d", CtrlOneLifeDigit)
+}

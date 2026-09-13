@@ -174,15 +174,6 @@ const (
 	OffListSize  = 0x0C
 )
 
-// 生命/能量球上限（游戏满级）。
-//
-// 生命: 内部以"点"存储，1 球 = 4 点，满级 12 球 → 48 点。
-// 能量: SeinEnergy.Max 直接以球数计，满级 15。
-const (
-	MaxHealthCells = 12
-	MaxEnergyCells = 15
-)
-
 // 生命值单位换算。
 //
 // SeinHealthController.HealthUpgradesCollected => MaxHealth/4 - 3，

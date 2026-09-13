@@ -349,7 +349,7 @@ func navList(s *session) []navEntry {
 	}
 	ol := ori.OneLife()
 	olEntry := navEntry{
-		label:  fmt.Sprintf("Ctrl+小键盘 %d", ori.CtrlOneLifeDigit),
+		label:  ori.OneLifeHotkeyLabel(),
 		name:   ol.Name(),
 		active: ol.Active(),
 		status: ol.Status(),
@@ -534,7 +534,7 @@ func renderTrainer(a *app, s *session) {
 
 	b.WriteString(cBox + "  ────────────────────────────────────────────────────────\n" + cReset)
 	b.WriteString("  " + cDim + "本窗口: ↑↓ 选择 · 回车/空格 开关   |   " + cReset +
-		cWhite + "小键盘 1-9/0" + cReset + " · " + cWhite + "Ctrl+小键盘 1-3" + cReset + "（全局，免切窗）   " +
+		cWhite + "小键盘 1-7" + cReset + " · " + cWhite + "Ctrl+小键盘 1-3" + cReset + " · " + cWhite + "Ctrl+Shift+小键盘 1" + cReset + "（全局，免切窗）   " +
 		cWhite + "HOME" + cReset + " 全关   " + cWhite + "F12" + cReset + " 重扫   " +
 		cWhite + "F1" + cReset + " 帮助   " + cWhite + "ESC" + cReset + " 返回   " + cWhite + "END" + cReset + " 退出\n")
 	b.WriteString("  " + cDim + a.getMsg() + cReset + "\n")
@@ -724,11 +724,17 @@ func main() {
 			s.r.SetProcess(nil)
 			a.setMsg("已重置，重新附加中…")
 		}
-		// ---- 全局热键：仅小键盘数字键（可配 Ctrl）----
-		// 每个功能只有一个快捷键；小键盘 1-9/0 为前 10 项，
-		// Ctrl+小键盘 1-6 为后 6 项（Ctrl+1 是一命保护）。
-		const vkControl = 0x11
+		// ---- 全局热键：仅小键盘数字键（可配 Ctrl / Ctrl+Shift）----
+		// 三档键位，靠"两个修饰键状态都要精确匹配"互斥:
+		//   小键盘 N       基础能力
+		//   Ctrl+小键盘 N  进阶能力
+		//   Ctrl+Shift+N   特殊能力（一命保护）
+		const (
+			vkControl = 0x11
+			vkShift   = 0x10
+		)
 		ctrlDown := core.GetAsyncKeyDown(vkControl)
+		shiftDown := core.GetAsyncKeyDown(vkShift)
 
 		// 小键盘 1-9 是 0x61-0x69，小键盘 0 是 0x60（全局热键，与焦点无关）
 		for i := 0; i < 9; i++ {
@@ -736,20 +742,20 @@ func main() {
 				digit := i + 1
 				hit := false
 				for _, f := range s.feats {
-					if f.Digit == digit && f.NeedCtrl == ctrlDown {
+					if f.Digit == digit && f.NeedCtrl == ctrlDown && f.NeedShift == shiftDown {
 						toggleFeature(a, s, f)
 						hit = true
 					}
 				}
-				// Ctrl+小键盘 1 = 一命保护（不在 feats 列表中）
-				if !hit && ctrlDown && digit == ori.CtrlOneLifeDigit {
+				// Ctrl+Shift+小键盘 1 = 一命保护（不在 feats 列表中）
+				if !hit && ctrlDown && shiftDown && digit == ori.CtrlOneLifeDigit {
 					toggleOneLife(a)
 				}
 			}
 		}
 		if sysKeys.pressed(0x60) {
 			for _, f := range s.feats {
-				if f.Digit == 0 && f.NeedCtrl == ctrlDown {
+				if f.Digit == 0 && f.NeedCtrl == ctrlDown && f.NeedShift == shiftDown {
 					toggleFeature(a, s, f)
 				}
 			}

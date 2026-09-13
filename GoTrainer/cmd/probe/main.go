@@ -2130,7 +2130,7 @@ func cmdFeats() {
 		seen[label] = true
 		fmt.Printf("  %-16s %s%s\n", label, f.Name, mark)
 	}
-	olLabel := fmt.Sprintf("Ctrl+小键盘 %d", ori.CtrlOneLifeDigit)
+	olLabel := ori.OneLifeHotkeyLabel()
 	mark := ""
 	if seen[olLabel] {
 		mark = "   <== 键位重复!"
@@ -2638,9 +2638,14 @@ func cmdFeat(p *core.Process) {
 	digit, _ := strconv.Atoi(os.Args[2])
 	secs := 3
 	useCtrl := false
+	useShift := false
 	for _, a := range os.Args[3:] {
 		if a == "-ctrl" {
 			useCtrl = true
+			continue
+		}
+		if a == "-shift" {
+			useShift = true
 			continue
 		}
 		if n, err := strconv.Atoi(a); err == nil {
@@ -2672,7 +2677,7 @@ func cmdFeat(p *core.Process) {
 	feats := ori.BuildFeatures()
 	var target *ori.Feature
 	for _, f := range feats {
-		if f.Digit == digit && f.NeedCtrl == useCtrl {
+		if f.Digit == digit && f.NeedCtrl == useCtrl && f.NeedShift == useShift {
 			target = f
 			break
 		}
@@ -2681,6 +2686,9 @@ func cmdFeat(p *core.Process) {
 		mod := ""
 		if useCtrl {
 			mod = "Ctrl+"
+		}
+		if useShift {
+			mod = "Ctrl+Shift+"
 		}
 		fmt.Printf("未找到 %s小键盘 %d 对应的功能\n", mod, digit)
 		return
