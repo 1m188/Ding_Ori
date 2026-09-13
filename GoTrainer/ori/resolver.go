@@ -90,6 +90,9 @@ func (r *Runtime) Addrs() (sein, level, soul, jump, dbl, death uint32) {
 
 // SetProcess 绑定进程并重置解析状态。
 func (r *Runtime) SetProcess(p *core.Process) {
+	if r.Prof != nil {
+		ApplyProfile(*r.Prof) // 原版/终极版的对象地址下界不同
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.Proc = p
@@ -237,14 +240,42 @@ func f32at(buf []byte, off int) float32 {
 // 高位就永远扫描不到——表现为"一开始能用，死亡重生后彻底失效"。
 //
 // 因此上界必须覆盖完整 32 位用户空间。
+//
+// 版本差异（2026-09 原版实测）: 终极版(Unity 5.3) 的托管堆在高位
+// （0x50-0x7B，早期对象 0x2A/0x2F）；**原版(Unity 5.0) 的托管堆在低地址**
+// （实测玩家对象 0x01A8E6C0），沿用 0x40000000 下界会一个对象都认不出来。
+// 所以对象下界按版本设置（见 ApplyProfile）。
 const (
 	maxUserAddr = 0xFFFF0000 // 32 位用户空间上限（保守留出保留区）
-	minObjAddr  = 0x40000000 // 托管堆对象下界（低区为代码/JIT/元数据）
-	// minObjLowAddr 是"早期构造对象"的下界。GameController / GameTimer 在
-	// 游戏启动早期就 new 出来，实测落在 0x2A/0x2F 段，低于 minObjAddr；
-	// 用 minObjAddr 过滤会导致这两个单例永远定位不到（见 README §8）。
-	minObjLowAddr = 0x10000000
 )
+
+// minObjAddr / minObjLowAddr 是"托管堆对象"的下界，随版本变化:
+//   - 终极版: 0x40000000（低区为代码/JIT/元数据），早期对象下界 0x10000000
+//   - 原版:   mono 堆从 0x00010000 起（对象实测在 0x01xxxxxx）
+var (
+	minObjAddr    uint32 = 0x40000000
+	minObjLowAddr uint32 = 0x10000000
+)
+
+// ApplyProfile 按目标版本设置地址空间下界。SetProcess 会自动调用；
+// 手工构造 Runtime 时（如 probe 的各命令）也可显式调用。
+func ApplyProfile(p Profile) {
+	if p.Version == Vanilla {
+		minObjAddr, minObjLowAddr = 0x00010000, 0x00010000
+		// 原版 vtable 实测在 0x35B7xxxx 段（klass=0x35B705D0,
+		// Keys 的 MonoVTable=0x35B73338），与终极版的 0x2A/0x50 段完全不同。
+		vtableBands = []struct{ lo, hi uint32 }{
+			{0x20000000, 0x40000000},
+			{0x50000000, 0x54000000},
+		}
+		return
+	}
+	minObjAddr, minObjLowAddr = 0x40000000, 0x10000000
+	vtableBands = []struct{ lo, hi uint32 }{
+		{0x2A000000, 0x2C000000},
+		{0x50000000, 0x54000000},
+	}
+}
 
 // isHeapPtr 判断是否可能是 32 位托管堆对象指针。
 func isHeapPtr(v uint32) bool {
@@ -672,6 +703,10 @@ func (r *Runtime) resolveAux(p *core.Process, sein uint32) {
 	r.auxTried = time.Now()
 	r.auxBusy = true
 	r.auxFails++
+	ver := Vanilla
+	if r.Prof != nil {
+		ver = r.Prof.Version
+	}
 	r.mu.Unlock()
 
 	go func() {
@@ -682,7 +717,7 @@ func (r *Runtime) resolveAux(p *core.Process, sein uint32) {
 			r.auxBusy = false
 			r.mu.Unlock()
 		}()
-		found := scanLowBandAux(p, sein)
+		found := scanLowBandAux(p, sein, ver)
 		r.mu.Lock()
 		gotAny := false
 		if needDeath && found.death != 0 {
@@ -729,7 +764,7 @@ func (r *Runtime) auxBackoff() time.Duration {
 //   - DifficultyController: 类名匹配 + Difficulty/Lowest ∈ [0,3]
 //
 // 多个候选时优先取引用活体 Sein 的那个（死亡计数）。
-func scanLowBandAux(p *core.Process, sein uint32) auxFound {
+func scanLowBandAux(p *core.Process, sein uint32, ver Version) auxFound {
 	var out auxFound
 	const chunk = 4 << 20
 	cache := map[uint32]string{}
@@ -792,9 +827,15 @@ func scanLowBandAux(p *core.Process, sein uint32) auxFound {
 						cur := f32at(fb[:], 0)
 						wait := f32at(fb[:], 4)
 						tele := f32at(fb[:], 8)
+						// 终极版: +0x24 是 m_sendTelemetryTimer（初值 300，会递减）。
+						// 原版: 该类字段顺序不同，+0x24 落在 m_builder 指针上，
+						// 遥测预筛恒不通过，故原版只用前两个字段预筛。
+						teleOK := tele >= -0.01 && tele <= 61
+						if ver == Vanilla {
+							teleOK = true
+						}
 						if cur >= -0.01 && cur <= 1e8 &&
-							wait >= -0.01 && wait <= 1.5 &&
-							tele >= -0.01 && tele <= 61 {
+							wait >= -0.01 && wait <= 1.5 && teleOK {
 							if classOfAt(v) == "GameTimer" {
 								out.timer, out.timerSlot = v, slot
 							}
@@ -999,10 +1040,23 @@ func findSlotsWithValue(p *core.Process, v uint32) []uint32 {
 }
 
 // vtableBand 判断地址是否可能是 MonoVTable 所在带。
-// 实测 vtable 位于 mono 元数据带(0x2A-0x2B)或 0x50-0x53 段。
+//
+// 实测: 终极版(Unity 5.3) 的 vtable 在 0x2A-0x2B 或 0x50-0x53 段；原版
+// (Unity 5.0) 的 mono 元数据整体更低——字段描述符在 0x27A-0x27B 段，klass 与
+// MonoVTable 在 0x35B7 段（实测 Keys klass=0x35B705D0、vtable=0x35B73338）。
+// 若沿用终极版的带过滤，原版会一个静态数据块都找不到（"三把钥匙"即因此失效）。
+var vtableBands = []struct{ lo, hi uint32 }{
+	{0x2A000000, 0x2C000000},
+	{0x50000000, 0x54000000},
+}
+
 func vtableBand(base uint32) bool {
-	return (base >= 0x2A000000 && base < 0x2C000000) ||
-		(base >= 0x50000000 && base < 0x54000000)
+	for _, b := range vtableBands {
+		if base >= b.lo && base < b.hi {
+			return true
+		}
+	}
+	return false
 }
 
 // findStaticData 找 klass 的 MonoVTable，返回其静态数据块基址。
