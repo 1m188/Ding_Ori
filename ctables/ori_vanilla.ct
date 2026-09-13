@@ -2,39 +2,45 @@
 <!--
   OriTrainer — 原版（Ori and the Blind Forest, ori.exe）字段对照表
   =================================================================
-  ⚠⚠ 状态：**本表尚未实机核验**（我们的逆向工作全部在终极版完成）。
+  ✅ 状态：**已于 2026-09 在原版（ori.exe, Unity 5.0）实机逐项核验**。
+  13 项功能全部跑通（`probe feat <数字> -vanilla`），偏移以本表为准。
 
-  本表与修改器的功能列表保持同步（功能名、字段名一致），但：
+  与终极版的差异（只有两处）：
+    1. SeinJump 全套高度偏移不同（原版比终极版少两个字段，整体前移）：
+       Backflip+50 Crouch+54 First+5C JumpIdle+60 Impulse+64 Second+68 Third+6C
+       （终极版是 +54/+58/+60/+64/+68/+70/+74）
+    2. PlayerAbilities 基础能力只有 9 项（原版没有 Grenade/Dash 字段）。
 
-    1. 所有「符号+偏移」字段的**偏移值都是从终极版抄来的**，原版是否相同
-       **未知**。原版是另一个 build（Unity 5.0，Assembly-CSharp.dll 不同），
-       mono 的字段重排结果可能不同 —— 必须重新核验。
-    2. 核验方法（先启动原版并进入存档）：
-           cd GoTrainer
-           go run ./cmd/probe offs SeinCharacter Level Energy Mortality -vanilla
-           go run ./cmd/probe offs SeinLevel SkillPoints -vanilla
-           ... 逐个类核验后，把本文件的偏移改掉
-       命令加 `-vanilla` 即附加到 ori.exe。
-    3. 下方的「第三方原版指针链」来自网络 CE 表（明确引用 "ori.exe"），
-       是**可直接使用**的参考数据，但同样未由我们独立验证。
+  原版专属环境事实（比偏移更容易踩坑，详见 README §2 / §8-24）：
+    - 托管堆在**低地址**（玩家对象实测 0x01A8E6C0），不是终极版的 0x5x-0x7B；
+    - vtable / klass 在 0x35B7xxxx 段，字段描述符在 0x27Axxxxx 段；
+    - 低区约 160MB，辅助单例（死亡/世界/计时器）扫描需 15-25 秒；
+    - 原版**没有** DifficultyController / OneLife / SeinDashAttack 类。
 
-  定位方法（与终极版相同，待核验）：游戏静态字段 Characters.Sein 与
-  Characters.Current 在低地址区形成 [P,0,0,P] 相邻双引用；扫到后按对象链取值。
-  详见 README「维护手册」。
+  核验命令：
+        cd GoTrainer
+        go run ./cmd/probe snap -vanilla           # 一次打印所有功能依赖字段
+        go run ./cmd/probe fieldoff <类> <字段> -vanilla
+        go run ./cmd/probe feat <数字> -vanilla    # 实机跑真实功能
+
+  下方的「第三方原版指针链」来自网络 CE 表，作为交叉参考保留。
+
+  定位方法：静态字段 Characters.Sein 与 Characters.Current 在低地址区形成
+  [P,0,0,P] 相邻双引用；扫到后按对象链取值。详见 README「维护手册」。
 -->
 <CheatTable CheatEngineTableVersion="18">
   <CheatEntries>
 
     <CheatEntry>
       <ID>2000</ID>
-      <Description>"★ 必读：原版字段偏移全部未核验（抄自终极版）；核验方法见 README 维护手册"</Description>
+      <Description>"★ 原版字段偏移已于 2026-09 实机核验；差异见本表头与 README §5/§8-24"</Description>
       <LastState/>
       <Color>FF0000</Color>
       <GroupHeader>1</GroupHeader>
       <CheatEntries>
         <CheatEntry>
           <ID>2001</ID>
-          <Description>"核验命令: probe offs &lt;类名&gt; &lt;字段名...&gt; -vanilla （原版进程 ori.exe）"</Description>
+          <Description>"核验命令: probe snap -vanilla / probe fieldoff &lt;类&gt; &lt;字段&gt; -vanilla / probe feat &lt;数字&gt; -vanilla"</Description>
           <LastState/>
           <Color>FF8000</Color>
           <GroupHeader>1</GroupHeader>
@@ -100,7 +106,7 @@
         </CheatEntry>
         <CheatEntry>
           <ID>2104</ID>
-          <Description>"第三方能力标志脚本（原表 attach_3943.ct）的偏移: Bash+14 ChargeFlame+18 WallJump+1C Stomp+20 DoubleJump+24 ChargeJump+28 Climb+34 Kuro'sFeather+38 SpiritFlame+3C，统一 +8 为 HasAbility —— 与终极版实测值一致，原版是否相同待核验"</Description>
+          <Description>"第三方能力标志脚本（原表 attach_3943.ct）偏移: Bash+14 ChargeFlame+18 WallJump+1C Stomp+20 DoubleJump+24 ChargeJump+28 Climb+34 Kuro'sFeather+38 SpiritFlame+3C，统一 +8 为 HasAbility —— 与本项目 2026-09 原版实测一致 ✓"</Description>
           <LastState/>
           <Color>808080</Color>
           <GroupHeader>1</GroupHeader>
@@ -110,7 +116,7 @@
 
     <CheatEntry>
       <ID>2200</ID>
-      <Description>"【普通功能】小键盘 1-9（偏移同终极版，⚠ 待核验）"</Description>
+      <Description>"【普通功能】小键盘 1-8（原版无冲刺，键位顺延；偏移同终极版，已核验）"</Description>
       <LastState/>
       <Color>808080</Color>
       <GroupHeader>1</GroupHeader>
@@ -145,7 +151,7 @@
         </CheatEntry>
         <CheatEntry>
           <ID>2205</ID>
-          <Description>"5 超级跳 — 6 个跳跃高度: First(+60) Second(+70) Third(+74) Crouch(+58) Backflip(+54) JumpIdle(+64)"</Description>
+          <Description>"5 超级跳 — 6 个跳跃高度（原版偏移）: First(+5C) Second(+68) Third(+6C) Crouch(+54) Backflip(+50) JumpIdle(+60)"</Description>
           <LastState/>
           <VariableType>Float</VariableType>
           <Address>jump+60</Address>
@@ -158,22 +164,15 @@
           <Address>doublejump+40</Address>
         </CheatEntry>
         <CheatEntry>
-          <ID>2208</ID>
-          <Description>"7 无限冲刺 — 只授基础冲刺 [playerab+AC]+8=1，并把 SeinDashAttack.m_hasDashed(dash+B1)=0（不碰技能树/AirDash）；⚠ 偏移抄自终极版，原版未核验"</Description>
-          <LastState/>
-          <VariableType>Byte</VariableType>
-          <Address>dash+B1</Address>
-        </CheatEntry>
-        <CheatEntry>
           <ID>2207</ID>
-          <Description>"8 无限能力点数 — SkillPoints(level+24, 目标 99) / Experience(level+2C)"</Description>
+          <Description>"7 无限能力点数 — SkillPoints(level+24, 目标 99) / Level(level+28, 0→1) / Experience(level+2C)"</Description>
           <LastState/>
           <VariableType>4 Bytes</VariableType>
           <Address>level+24</Address>
         </CheatEntry>
         <CheatEntry>
           <ID>2209</ID>
-          <Description>"9 显示地图 — AreaMapDebugNavigation.UndiscoveredMapVisible(mapnav+20, Byte 置 1)；仅本次游戏有效、重启还原；⚠ 偏移抄自终极版，原版未核验"</Description>
+          <Description>"8 显示地图 — AreaMapDebugNavigation.UndiscoveredMapVisible(mapnav+20, Byte 置 1)；仅本次游戏有效、重启还原（已核验）"</Description>
           <LastState/>
           <VariableType>Byte</VariableType>
           <Address>mapnav+20</Address>
@@ -183,7 +182,7 @@
 
     <CheatEntry>
       <ID>2300</ID>
-      <Description>"【特殊功能】Ctrl+小键盘 1-5（偏移同终极版，⚠ 待核验）"</Description>
+      <Description>"【特殊功能】Ctrl+小键盘 1-5（偏移同终极版，已核验）"</Description>
       <LastState/>
       <Color>808080</Color>
       <GroupHeader>1</GroupHeader>
@@ -204,21 +203,21 @@
         </CheatEntry>
         <CheatEntry>
           <ID>2303</ID>
-          <Description>"Ctrl+3 解锁全部基础技能 — 11 项: SpiritFlame+3C WallJump+1C ChargeFlame+18 DoubleJump+24 Bash+14 Stomp+20 Glide+38 Climb+34 ChargeJump+28 Grenade+A8 Dash+AC（每项 [playerab+偏移]+8 = HasAbility）"</Description>
+          <Description>"Ctrl+3 解锁全部基础技能 — 原版 9 项: SpiritFlame+3C WallJump+1C ChargeFlame+18 DoubleJump+24 Bash+14 Stomp+20 Glide+38 Climb+34 ChargeJump+28（每项 [playerab+偏移]+8 = HasAbility；Grenade+A8/Dash+AC 是终极版专属，原版无此字段）"</Description>
           <LastState/>
           <VariableType>Byte</VariableType>
           <Address>[playerab+3C]+8</Address>
         </CheatEntry>
         <CheatEntry>
           <ID>2304</ID>
-          <Description>"Ctrl+4 重置时间 — GameTimer.CurrentTime(timer+1C, float 秒) 写 0；⚠ 原版偏移未核验（核验: probe timer -vanilla）"</Description>
+          <Description>"Ctrl+4 重置时间 — GameTimer.CurrentTime(timer+1C, float 秒) 写 0（已核验；原版该类 +24 是 m_builder 指针，故单例预筛只用 +1C/+20）"</Description>
           <LastState/>
           <VariableType>Float</VariableType>
           <Address>timer+1C</Address>
         </CheatEntry>
         <CheatEntry>
           <ID>2305</ID>
-          <Description>"Ctrl+5 获得三把钥匙 — Keys.GinsoTree/ForlornRuins/MountHoru = keys+0/+1/+2（Byte 置 1）；⚠ 原版未核验（核验: probe keys -vanilla）"</Description>
+          <Description>"Ctrl+5 获得三把钥匙 — Keys.GinsoTree/ForlornRuins/MountHoru = keys+0/+1/+2（Byte 置 1）；已核验（keys 静态块原版实测 0x35B73370）"</Description>
           <LastState/>
           <VariableType>Byte</VariableType>
           <Address>keys+0</Address>
@@ -228,26 +227,17 @@
 
     <CheatEntry>
       <ID>2400</ID>
-      <Description>"【特殊功能】Ctrl+小键盘 6"</Description>
+      <Description>"【原版无此功能】一命保护 — 原版没有 DifficultyController / OneLife 类（难度/一命机制是终极版新增），修改器在原版不显示、也不响应 Ctrl+小键盘 6"</Description>
       <LastState/>
-      <Color>C00000</Color>
+      <Color>808080</Color>
       <GroupHeader>1</GroupHeader>
-      <CheatEntries>
-        <CheatEntry>
-          <ID>2401</ID>
-          <Description>"Ctrl+6 一命保护 — DifficultyController.Difficulty(diffc+18) 锁为 Easy(0)（死亡不清档 + 伤害减半）；⛔ LowestDifficulty(diffc+1C) 只读禁写。⚠ 偏移抄自终极版，原版未核验（核验: probe onelife -vanilla）"</Description>
-          <LastState/>
-          <Color>C00000</Color>
-          <VariableType>4 Bytes</VariableType>
-          <Address>diffc+18</Address>
-        </CheatEntry>
-      </CheatEntries>
     </CheatEntry>
 
   </CheatEntries>
 
   <UserdefinedSymbols>
-    <!-- ★ 原版同样需要每会话更新: probe bases -xml -vanilla -->
+    <!-- ★ 原版同样需要每会话更新: probe bases -xml -vanilla
+         （diffc 仅终极版有；原版该符号为 0）-->
     <SymbolEntry>
       <Name>sein</Name>
       <Address>00000000</Address>

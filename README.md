@@ -10,8 +10,9 @@
 后者记录了本项目所有逆向结论、踩过的坑与维护流程，目的就是让**完全不了解
 上下文的新会话**能在最短时间内接手。
 
-> 当前状态：**终极版功能已实测可用；原版未做验证**（我们的逆向工作全部在终极版
-> 完成，原版字段偏移未核验，见 `ctables/ori_vanilla.ct` 的说明）。
+> 当前状态：**终极版与原版功能均已实测可用**。原版核验于 2026-09（Unity 5.0 /
+> mono 地址空间与终极版不同，见 §2、§8-24）；两版字段偏移差异只有 `SeinJump`
+> 与 `PlayerAbilities` 的基础能力清单，其余同表通用（§5）。
 
 ---
 
@@ -32,7 +33,7 @@
 > 为什么没有 Ctrl+Shift 档：Windows Terminal 默认把 `Ctrl+Shift+1..9` 绑成
 > "新建标签页"，会把按键在送到程序之前吃掉。详见维护手册 §8-23。
 
-**普通功能 —— 小键盘 1-9/0**
+**普通功能 —— 小键盘 1-9/0（终极版）**
 
 | 热键 | 功能 | 状态 |
 |---|---|---|
@@ -46,7 +47,18 @@
 | 小键盘 8 | 无限能力点数 | ✓ 实测（不足才补满，目标 99） |
 | 小键盘 9 | 显示地图 | ✓ 实测（地形+图标+无迷雾；**仅本次游戏有效，重启还原**；不影响成就） |
 
-**特殊功能 —— Ctrl+小键盘 1..6**
+**特殊功能 —— Ctrl+小键盘 1..6（终极版）**
+
+> **原版（ori.exe）键位**：原版没有冲刺，也没有难度/一命机制，因此
+> **去掉"无限冲刺"与"一命保护"，其余按键按顺序顺延**：
+>
+> | | 小键盘 | Ctrl+小键盘 |
+> |---|---|---|
+> | 终极版 | 1-6 同上，7 无限冲刺，8 无限能力点数，9 显示地图 | 1-5 同上，6 一命保护 |
+> | 原版 | 1-6 同上，**7 无限能力点数，8 显示地图** | **1-5 同上**（无 6） |
+>
+> 原版的"解锁全部基础技能"补授 **9 项**（无 Grenade/Dash）。
+> 修改器会按版本自动裁剪功能表，见 `BuildFeatures(prof)`。
 
 | 热键 | 功能 | 状态 |
 |---|---|---|
@@ -160,15 +172,22 @@
 
 ## §2 进程内存模型（关键前提）
 
-**地址空间是 32 位 + `/LARGEADDRESSAWARE`**：托管堆横跨 `0x50xxxxxx`–`0x7Bxxxxxx`。
-实测观察到的地址带：
+**地址空间是 32 位 + `/LARGEADDRESSAWARE`**。**两个版本的地址带完全不同**，
+因此对象下界与 vtable 扫描带都按版本设置（`ApplyProfile`）：
 
-| 地址带 | 内容 |
-|---|---|
-| `< 0x10000000` | mono 低区：静态数据 / 分配区 / JIT 代码（实测有 `MEM_PRIVATE + PAGE_EXECUTE_READWRITE` 段） |
-| `0x2A000000`–`0x2BFFFFFF` | mono 元数据：klass、类型名字符串、部分 vtable |
-| `0x50xxxxxx`–`0x53xxxxxx` | vtable / mono 运行时结构 |
-| `0x50xxxxxx`–`0x7Bxxxxxx` | **托管堆对象**（我们的目标） |
+| 地址带 | 终极版（Unity 5.3） | 原版（Unity 5.0） |
+|---|---|---|
+| 托管堆对象 | `0x50xxxxxx`–`0x7Bxxxxxx` | **`0x01xxxxxx` 起（低地址！）** |
+| mono 元数据 klass / 字段描述符 | `0x2Axxxxxx`–`0x2Bxxxxxx` | 描述符 `0x27Axxxxx`、klass `0x35B7xxxx` |
+| vtable / mono 运行时结构 | `0x2Axxxxxx`、`0x50xxxxxx`–`0x53xxxxxx` | `0x35B7xxxx` 段 |
+| 低区静态数据 / JIT | `< 0x10000000` | `< 0x10000000`（原版低区约 160MB） |
+
+要点：
+
+- **原版托管堆在低地址**（实测玩家对象 `0x01A8E6C0`）：沿用终极版的
+  `0x40000000` 对象下界会**一个对象都认不出来**（见 §8-24）。
+- **原版 vtable 在 `0x35B7xxxx`**：`findStaticData` 的扫描带若只允许终极版的
+  `0x2A/0x50` 段，`Keys` 静态块永远定位不到。
 
 要点：
 
@@ -278,7 +297,11 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 `PlayerAbilities.DoubleJump` 按声明顺序推算是 `+0x18`，**实际是 `+0x24`**；
 `DoubleJumpUpgrade` 推算 `+0x48`，实际 `+0x54`。**必须查元数据，不要推算。**
 
-## §5 字段偏移总表（终极版，均已由元数据+活体内存双重核验）
+## §5 字段偏移总表（**终极版 / 原版通用**，均已由元数据+活体内存双重核验）
+
+> 原版核验（2026-09）：除下表标注外，**所有偏移与终极版一致**（两个版本这些类的
+> 字段声明顺序相同，mono 重排结果也就相同）。仅 `SeinJump` 的全套高度偏移、
+> 以及 `PlayerAbilities` 的 Grenade/Dash 两项不同（原版没有这两个字段）。
 
 ### SeinCharacter 及其直接子对象
 
@@ -339,6 +362,10 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 | m_waitTillSave | 0x20 | float ∈[0,1]，内部每秒刷新节流（**只读校验用**） |
 | m_sendTelemetryTimer | 0x24 | float ∈[0,60]，遥测发送计时（**只读校验用**） |
 
+> ⚠ 原版该类字段顺序不同：`+0x24` 落在 `m_builder` 指针上，`m_sendTelemetryTimer`
+> 不在该位置。`scanLowBandAux` 的 GameTimer 预筛在原版只用 `CurrentTime` +
+> `m_waitTillSave` 两个字段（见 §8-24）。
+
 > 暂停界面显示的"花费时间" = `GameTimer.DisplayTimeAsString`（由 `CurrentTime`
 > 派生，只显示分钟数）；`TimeCounterDisplay.Update()` 每 1 秒把它写进 GUIText。
 > 另有 `m_builder`（`GameTimer+0x14` 的 StringBuilder）保存 `H:MM:SS` 调试串，
@@ -359,15 +386,22 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 
 ### SeinJump（跳跃高度全在 SeinJump 上，**不是一个变量**）
 
-| 字段 | 偏移 | 用在哪 |
-|---|---|---|
-| BackflipJumpHeight | 0x54 | 转身后空翻 |
-| CrouchJumpHeight | 0x58 | 蹲跳 |
-| FirstJumpHeight | 0x60 | 移动跳/站立跳 轮换第 1 段 |
-| JumpIdleHeight | 0x64 | 备用高度 |
-| JumpImpulse | 0x68 | 起跳冲量（**当前未被任何功能修改**） |
-| SecondJumpHeight | 0x70 | 轮换第 2 段 |
-| ThirdJumpHeight | 0x74 | 轮换第 3 段 / 贴墙跳 |
+**两版偏移不同**（终极版多出 `SpinJumpSoundProvider` / `m_currentJumpingMaterial`
+两个字段，使后续字段整体后移）——代码里用 `JumpHeightOffsets(version)` 取，
+不要直接写死：
+
+| 字段 | 终极版 | 原版 | 用在哪 |
+|---|---|---|---|
+| BackflipJumpHeight | 0x54 | **0x50** | 转身后空翻 |
+| CrouchJumpHeight | 0x58 | **0x54** | 蹲跳 |
+| FirstJumpHeight | 0x60 | **0x5C** | 移动跳/站立跳 轮换第 1 段 |
+| JumpIdleHeight | 0x64 | **0x60** | 备用高度 |
+| JumpImpulse | 0x68 | **0x64** | 起跳冲量（**当前未被任何功能修改**） |
+| SecondJumpHeight | 0x70 | **0x68** | 轮换第 2 段 |
+| ThirdJumpHeight | 0x74 | **0x6C** | 轮换第 3 段 / 贴墙跳 |
+
+> 超级跳在**两版都放大 6 项**（不含 JumpImpulse）；原版偏移由
+> `probe findfield SeinJump ... -vanilla` 采集。
 
 ### SeinDoubleJump
 
@@ -395,7 +429,8 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 
 - 能力字段全部是 `CharacterAbility` 引用（连续 `0x14`..`0xB0`，共 40 项）；
   `CharacterAbility` 内 `HasAbility` 在 **+0x08，1 字节 bool**。
-- **基础能力（暂停界面 11 项）** ← 修改器"解锁全部基础技能"只给这些：
+- **基础能力** ← 修改器"解锁全部基础技能"只给这些（**终极版 11 项 / 原版 9 项**，
+  原版没有 Grenade/Dash 两个字段）：
 
 | 偏移 | 字段 | 中文 |
 |---|---|---|
@@ -408,8 +443,8 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 | 0x34 | Climb | 攀爬 |
 | 0x38 | Glide | 黑子之羽 |
 | 0x3C | SpiritFlame | 精灵之火 |
-| 0xA8 | Grenade | 光芒爆裂 |
-| 0xAC | Dash | 冲刺 |
+| 0xA8 | Grenade | 光芒爆裂（仅终极版） |
+| 0xAC | Dash | 冲刺（仅终极版） |
 
 - 其余为**技能树被动 / 升级**（RapidFire、WaterBreath、Sense、StompUpgrade、
   DoubleJumpUpgrade、BashBuff、UltraDefense、各 \*Efficiency、Rekindle、Regroup、
@@ -427,17 +462,17 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 | 无限能量 | `energy+20 = energy+24` | 同上 |
 | 灵魂链接无需冷却 | `soulflame+B0 = 0` | |
 | 不安全区域建链接 | 按住期间 `soulflame+98（HoldDownDuration）= +Inf`，再 `soulflame+94 = 1.0`、`+C0 = 0` | 必须先检查 `m_tapRemainingTime(+B8) <= 0`，否则轻点开技能树失效（§8-16）；只写 1.0 会被同帧蓄力回退扣掉，故用 +Inf 抑制回退（§8-25）；**每次按键只施放一次**（施放判定不含冷却，连写会刷存档） |
-| 超级跳 | 同时放大 6 个高度字段（0x54/0x58/0x60/0x64/0x70/0x74），关闭还原 | 只放大一个会出现"有的跳得高有的照旧"（§8-17） |
+| 超级跳 | 同时放大 6 个高度字段（终极版 0x54/0x58/0x60/0x64/0x70/0x74；**原版 0x50/0x54/0x5C/0x60/0x68/0x6C**，见 `JumpHeightOffsets`），关闭还原 | 只放大一个会出现"有的跳得高有的照旧"（§8-17） |
 | 无限二段跳 | `playerab+24 → +8 = 1`（能力开关）+ `doublejump+40 = 999` | 只写次数不够（§8-14）；**关闭时不还原能力开关**（§8-15） |
-| 无限冲刺 | `[playerab+AC]+8 = 1`（只授基础 Dash）+ `dash+0xB1 = 0` | **不碰技能树**（AirDash 只读作提示）；自购 AirDash 后空中同样无限（§7-15）；组件未实例化时需触发一次（读档/买技能） |
+| 无限冲刺 | `[playerab+AC]+8 = 1`（只授基础 Dash）+ `dash+0xB1 = 0` | **仅终极版**（原版无 Dash 字段/组件，功能会被裁掉）；**不碰技能树**（AirDash 只读作提示）；自购 AirDash 后空中同样无限（§7-15）；组件未实例化时需触发一次（读档/买技能） |
 | 无限能力点数 | `level+24`，`< 99` 才写；并把 `level+28`（等级）从 0 修正为 1 | 持续写会与升级结算打架（§8-13）；等级为 0 时技能树打不开（§8-21） |
 | 显示地图 | `[AreaMapUI+50]（AreaMapDebugNavigation）+0x20 = 1` | 纯显示位；**不写存档、重启还原**；不影响成就/完成度（§7-16） |
 | 死亡数归零 | `death+14 = 0` | |
 | 100% 探索 | 遍历 `gw+18` 列表，元素从 `[_items]+0x10` 起，每个区域 `+14 = 1.0`、`+18 = 0` | 元素基址易错（§8-20）；只能解锁"完成地图"成就，不是"找齐秘密"（§7-6） |
-| 解锁全部基础技能 | 上表 11 个 `[playerab+偏移]+8 = 1` | 只写 1 字节；**部分能力需读档或进技能树买一个技能后才生效**（状态栏已提示） |
-| 重置时间 | `timer+1C = 0.0` | 每周期写 = 冻结在 0；对象每周期从静态槽重读（`TimerAddr()`，换场景会重建） |
+| 解锁全部基础技能 | `BaseAbilityOffsets(version)`: 终极版 11 个 / **原版 9 个** `[playerab+偏移]+8 = 1` | 只写 1 字节；**部分能力需读档或进技能树买一个技能后才生效**（状态栏已提示） |
+| 重置时间 | `timer+1C = 0.0` | 每周期写 = 冻结在 0；对象每周期从静态槽重读（`TimerAddr()`，换场景会重建）；原版辅助扫描较慢，附加后前 ~25 秒显示"定位中" |
 | 获得三把钥匙 | `Keys` 静态块 `+0/+1/+2 = 1` | 纯静态类字段（非对象链），由 `KeysAddr()` 定位并缓存；三个元素标记刻意不做（§7-14） |
-| 一命保护 | `diffc+18 = 0`（Easy），仅当 `diffc+1C（LowestDifficulty）== OneLife` 时 | 死亡判定读 `Difficulty`，改它即可断掉清档链；**永不写 `+0x1C`**（成就判定字段）。见 §7-7 |
+| 一命保护 | `diffc+18 = 0`（Easy），仅当 `diffc+1C（LowestDifficulty）== OneLife` 时 | **仅终极版**（原版无 DifficultyController/OneLife 类，功能会被裁掉）；死亡判定读 `Difficulty`，改它即可断掉清档链；**永不写 `+0x1C`**（成就判定字段）。见 §7-7 |
 
 所有执行器一律通过 `Runtime.Addrs()` / `SubAddr()` 取地址（内部加锁）——
 **不要直接读 Runtime 字段**，后台刷新会并发改写（§8-6）。
@@ -797,6 +832,20 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
     → 配套加固: `DeactivateFeature` 在还原前用 `Runtime.HasProcess()` 确认进程仍
     绑定——F12 会临时 `SetProcess(nil)`，此时若去写内存会空指针 panic。
 
+24. **原版（ori.exe）整套功能"定位全失败 / Keys 静态块找不到 / 计时器找不到"**
+    → 原版是 Unity 5.0 的另一份 mono 运行时，**地址空间和终极版完全不同**：
+    托管堆在**低地址**（实测玩家对象 `0x01A8E6C0`，而代码里的对象下界是
+    终极版的 `0x40000000`）；vtable 在 `0x35B7xxxx`（代码只允许终极版的
+    `0x2A/0x50` 段）；GameTimer 的遥测字段偏移也不同，导致预筛拒绝所有候选。
+    → 修：这三处都改成按版本取值——`ApplyProfile` 设置
+    `minObjAddr/minObjLowAddr/vtableBands`；`scanLowBandAux` 增加 `ver` 参数，
+    原版跳过遥测预筛。
+    → 教训: 凡是"地址范围 / 扫描带 / 预筛字段"这类**依赖目标运行时布局**的常量，
+    都不能只按终极版写死；先跑 `probe diag -vanilla` + `probe keys -vanilla` +
+    `probe snap -vanilla`（见 §9）确认链路，再逐功能 `probe feat N -vanilla`。
+    → 附带事实: 原版低区约 160MB，辅助单例扫描需 15–25 秒，首次附加后
+    "死亡数/探索度/计时器"类功能会先显示"定位中"，扫描完成后自动生效。
+
 ## §9 诊断工具 `probe`（等价 CE 的核心能力）
 
 全部命令都可加 `-vanilla` 切换到原版进程（`ori.exe`）。常用：
@@ -808,6 +857,8 @@ klass:  [0] = 自身（自指，可靠性判据）   [+0x30] = 类型名字符�
 | `feats` | 打印功能/键位表并**自动检测键位重复** |
 | `feat <数字> [秒] [-ctrl] [-shift]` | 对活体进程运行**真实功能**并打印状态（`-ctrl`/`-shift` 对应档位） |
 | `offs <类名> <字段名...>` | **权威字段偏移**（从 mono 元数据读，等价 CE mono dissect） |
+| `snap` | **一次打印所有功能依赖字段**（生命/能量/等级/跳跃/能力/探索/钥匙/地图/计时器）——换版本核验偏移的首选 |
+| `fieldoff <类名> <字段名>` | 按"字段名+声明类名"反查偏移（比 `offs` 更适合常见字段名，`offs` 对 `Max` 这类名会退化到很慢） |
 | `heapfind <类名>` | 在堆区按类名枚举实例（确认某单例是否存在） |
 | `singleton <类名> [minObj]` | 在低区找"指向该类实例的静态槽"（单例定位；可下调对象下界） |
 | `slotscan <类名> <lo> <hi> [minObj]` | 在指定地址范围内找"指向该类实例的槽位"（**定位早期对象/静态块首选**，如 `slotscan GameTimer 0x063C0000 0x063E0000 0x10000`） |
@@ -850,7 +901,8 @@ probe feats     → 键位表 + "无重复 ✓"
    - README：§5 偏移表、§6 功能表、§7 机制、§8 新踩的坑；
    - `ctables/ori_de.ct`：新增/修改对应记录（字段名与偏移与 `offsets.go` 一致）；
      换会话后表可用 `probe bases -xml` 一键更新基址符号；
-   - 原版相关改动若未实测，**必须在 `ori_vanilla.ct` 里标注"未核验"**。
+   - 原版相关改动若未实测，**必须在 `ori_vanilla.ct` 里标注"未核验"**；
+     实测后把表头状态改为"已核验"并写明核验日期与命令（2026-09 起原版已全量核验）。
 8. **提交**：说明"现象→根因→修法"，便于回溯。
 
 键位分配规则（**只有两档**）：普通功能用**小键盘 1-9/0**；特殊功能用
@@ -870,11 +922,15 @@ probe feats     → 键位表 + "无重复 ✓"
 
 ## §11 未解决 / 待办
 
-**原版（ori.exe）**：字段偏移全部未核验，功能未实测。核验路径见 `ori_vanilla.ct`
-的注释（`probe offs ... -vanilla`、`probe timer -vanilla`、`probe onelife -vanilla`）。
+**原版支持（2026-09 完成）**：地址空间/vtable 带按版本适配后，13 项功能在原版
+实机逐项验证通过（`probe feat <数字> -vanilla`）。两版差异与核验结论见 §5、§8-24。
 
-**探针/脚本的小限制**：`probe` 的部分命令（`heapfind`/`singleton` 等）是围绕终极版
-观察写的，用于原版前应先跑 `diag -vanilla` 确认定位链路可用。
+**已知限制**：
+- 原版低区约 160MB，`scanLowBandAux` 一次扫描需 **15–25 秒**；附加后前 ~25 秒内
+  "死亡数归零 / 100% 探索 / 重置时间"会先显示"定位中"，扫描完成后自动生效
+  （功能 Tick 持续重试，无需重开）。
+- `probe` 部分命令（`heapfind`/`singleton`）仍是围绕终极版写的，用于原版前先跑
+  `probe diag -vanilla` 确认链路。
 
 **已全部完成**（历史记录）：
 - **重置时间**：`GameTimer.Instance` 静态槽定位，写 `+0x1C=0`，Ctrl+小键盘 4（§7-13）。
