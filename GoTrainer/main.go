@@ -2,16 +2,17 @@
 // 纯标准库实现: Windows console ANSI TUI。
 //
 // 按键模型（两条规则，互不干扰）:
-//  1. 界面按键（↑↓/回车/ESC/F1/HOME/END）读**控制台输入事件**。控制台
+//  1. 界面按键（↑↓/回车/ESC/F1/HOME）读**控制台输入事件**。控制台
 //     输入缓冲只在本窗口拥有键盘焦点时才会收到事件，因此天然只在
 //     修改器前台时响应，无需猜测窗口归属。
-//  2. 功能热键（小键盘 1-9/0、Ctrl+小键盘）用 GetAsyncKeyState 全局轮询，
-//     只要修改器进程在运行就生效，前后台无关。
+//  2. 功能热键（小键盘 1-9/0、Ctrl+小键盘）用
+//     GetAsyncKeyState 全局轮询，只要修改器进程在运行就生效，前后台无关。
+//
+// 不提供"按键直接退出程序"：退出请用窗口关闭按钮（END 曾绑定退出，已移除）。
 package main
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -60,11 +61,6 @@ func init() {
 	//  一直下移）。不支持 1049 的宿主会忽略该序列，此时仍有 render() 的
 	// 高度截断 + ESC[J 兜底。
 	writeConsole("\x1b[?1049h\x1b[?25l\x1b[?7l")
-}
-
-// cleanupConsole 退出前恢复终端状态（os.Exit 不会执行 defer）。
-func cleanupConsole() {
-	writeConsole("\x1b[?7h\x1b[?25h\x1b[?1049l")
 }
 
 // ---------- 画面输出 ----------
@@ -294,7 +290,7 @@ type session struct {
 	r     *ori.Runtime
 	feats []*ori.Feature
 
-	// procMu 保护 proc: 看护协程与主循环（F12/ESC/END）都会改写它。
+	// procMu 保护 proc: 看护协程与主循环（F12/ESC）都会改写它。
 	procMu sync.Mutex
 	proc   *core.Process
 }
@@ -345,10 +341,10 @@ type navEntry struct {
 //
 // 顺序 = 功能从"普通"到"特殊"：
 //
-//	小键盘 1-9/0（基础能力）→ Ctrl+小键盘（进阶能力）→ Ctrl+Shift+小键盘（特殊能力）
+//	小键盘 1-9/0（普通功能）→ Ctrl+小键盘（特殊功能）
 //
-// 功能表本身已按这个顺序排列，一命保护（Ctrl+Shift+小键盘 1）**追加到最后**。
-// 注意不要再把它插到 Ctrl 组之前：那会让"最特殊"的功能夹在两组之间，
+// 功能表本身已按这个顺序排列，一命保护（Ctrl+小键盘 5）**追加到最后**。
+// 注意不要再把它插到前面的功能之间：那会让"最特殊"的功能夹在中间，
 // 与键位从简单到复杂的顺序不一致。
 func navList(s *session) []navEntry {
 	if s == nil {
@@ -391,7 +387,7 @@ func toggleOneLife(a *app) {
 	on := !ol.Active()
 	ol.SetActive(on)
 	if on {
-		a.setMsg("已激活: 一命保护 — 死亡如普通模式在检查点复活，成就资格保留")
+		a.setMsg("已激活: 一命保护 — 死亡正常复活、难度=Easy，成就资格保留")
 	} else {
 		a.setMsg("已关闭: 一命保护")
 	}
@@ -449,7 +445,7 @@ func renderSelector(a *app) {
 	var b strings.Builder
 
 	b.WriteString(cTitle + "  OriTrainer — 奥日与迷失森林 双版本修改器\n\n" + cReset)
-	b.WriteString(cWhite + "  请选择游戏版本（↑↓/WS 选择，回车确认）:\n\n" + cReset)
+	b.WriteString(cWhite + "  请选择游戏版本（↑↓ 选择，回车确认）:\n\n" + cReset)
 
 	profiles := []ori.Profile{ori.Profiles[ori.Vanilla], ori.Profiles[ori.Definitive]}
 	for i, prof := range profiles {
@@ -463,7 +459,7 @@ func renderSelector(a *app) {
 	}
 
 	b.WriteString("\n" + cBox + "  ────────────────────────────────────────────────────────\n" + cReset)
-	b.WriteString("  " + cWhite + "↑/↓ 或 W/S" + cReset + " 选择   " + cWhite + "回车" + cReset + " 进入   " + cWhite + "ESC" + cReset + " 退出\n")
+	b.WriteString("  " + cWhite + "↑/↓" + cReset + " 选择   " + cWhite + "回车" + cReset + " 进入\n")
 	b.WriteString("  " + cDim + a.getMsg() + cReset + "\n")
 
 	render(b.String())
@@ -525,9 +521,8 @@ func renderTrainer(a *app, s *session) {
 
 	b.WriteString(cBox + "  ────────────────────────────────────────────────────────\n" + cReset)
 	b.WriteString("  " + cDim + "本窗口: ↑↓ 选择 · 回车/空格 开关   |   " + cReset +
-		cWhite + "小键盘 1-7" + cReset + " · " + cWhite + "Ctrl+小键盘 1-3" + cReset + " · " + cWhite + "Ctrl+Shift+小键盘 1" + cReset + "（全局，免切窗）   " +
 		cWhite + "HOME" + cReset + " 全关   " + cWhite + "F12" + cReset + " 重扫   " +
-		cWhite + "F1" + cReset + " 帮助   " + cWhite + "ESC" + cReset + " 返回   " + cWhite + "END" + cReset + " 退出\n")
+		cWhite + "F1" + cReset + " 帮助   " + cWhite + "ESC" + cReset + " 返回\n")
 	b.WriteString("  " + cDim + a.getMsg() + cReset + "\n")
 
 	render(b.String())
@@ -632,10 +627,7 @@ func main() {
 		vkReturn = 0x0D
 		vkSpace  = 0x20
 		vkEscape = 0x1B
-		vkW      = 0x57
-		vkS      = 0x53
 		vkHome   = 0x24
-		vkEnd    = 0x23
 		vkF1     = 0x70
 		vkF12    = 0x7B
 	)
@@ -644,10 +636,9 @@ func main() {
 		ck.poll()
 
 		if !a.chosen {
-			selUp := uiKeys.pressed(vkUp) || uiKeys.pressed(vkW)
-			selDown := uiKeys.pressed(vkDown) || uiKeys.pressed(vkS)
+			selUp := uiKeys.pressed(vkUp)
+			selDown := uiKeys.pressed(vkDown)
 			selRet := uiKeys.pressed(vkReturn)
-			selEsc := uiKeys.pressed(vkEscape)
 			if selUp {
 				a.selCursor = (a.selCursor + 1) % 2
 			}
@@ -660,11 +651,6 @@ func main() {
 					prof = ori.Profiles[ori.Definitive]
 				}
 				a.choose(prof)
-			}
-			if selEsc {
-				cleanupConsole()
-				fmt.Println("退出。")
-				os.Exit(0)
 			}
 			renderSelector(a)
 			time.Sleep(80 * time.Millisecond)
@@ -680,20 +666,12 @@ func main() {
 		// 界面按键（控制台输入）: 只有修改器窗口有焦点时才有事件，
 		// 因此无需再做前台判断。先统一采样，再依次处理。
 		f1Pressed := uiKeys.pressed(vkF1)
-		endPressed := uiKeys.pressed(vkEnd)
 		escPressed := uiKeys.pressed(vkEscape)
 		homePressed := uiKeys.pressed(vkHome)
 		f12Pressed := uiKeys.pressed(vkF12)
 
 		if f1Pressed {
 			a.help.Store(!a.help.Load())
-		}
-		if endPressed {
-			ori.DeactivateAll(s.feats, s.r)
-			s.closeProc()
-			cleanupConsole()
-			fmt.Println("OriTrainer 已退出。")
-			os.Exit(0)
 		}
 		if escPressed {
 			ori.DeactivateAll(s.feats, s.r)
@@ -715,11 +693,11 @@ func main() {
 			s.r.SetProcess(nil)
 			a.setMsg("已重置，重新附加中…")
 		}
-		// ---- 全局热键：仅小键盘数字键（可配 Ctrl / Ctrl+Shift）----
-		// 三档键位，靠"两个修饰键状态都要精确匹配"互斥:
-		//   小键盘 N       基础能力
-		//   Ctrl+小键盘 N  进阶能力
-		//   Ctrl+Shift+N   特殊能力（一命保护）
+		// ---- 全局热键：仅小键盘数字键（可配 Ctrl）----
+		// 两档键位，靠"修饰键状态精确匹配"互斥:
+		//   小键盘 N       普通/基础功能
+		//   Ctrl+小键盘 N  特殊功能（含一命保护）
+		// 按住 Shift 时 Ctrl 档不会触发（NeedShift=false != shiftDown=true）。
 		const (
 			vkControl = 0x11
 			vkShift   = 0x10
@@ -728,28 +706,26 @@ func main() {
 		shiftDown := core.GetAsyncKeyDown(vkShift)
 
 		// 小键盘 1-9 是 0x61-0x69，小键盘 0 是 0x60（全局热键，与焦点无关）
+		// 一命保护（Ctrl+小键盘 5）不在 feats 列表里，单独处理。
+		handleDigit := func(digit int) {
+			hit := false
+			for _, f := range s.feats {
+				if f.Digit == digit && f.NeedCtrl == ctrlDown && f.NeedShift == shiftDown {
+					toggleFeature(a, s, f)
+					hit = true
+				}
+			}
+			if !hit && ctrlDown && !shiftDown && digit == ori.CtrlOneLifeDigit {
+				toggleOneLife(a)
+			}
+		}
 		for i := 0; i < 9; i++ {
 			if sysKeys.pressed(0x61 + i) {
-				digit := i + 1
-				hit := false
-				for _, f := range s.feats {
-					if f.Digit == digit && f.NeedCtrl == ctrlDown && f.NeedShift == shiftDown {
-						toggleFeature(a, s, f)
-						hit = true
-					}
-				}
-				// Ctrl+Shift+小键盘 1 = 一命保护（不在 feats 列表中）
-				if !hit && ctrlDown && shiftDown && digit == ori.CtrlOneLifeDigit {
-					toggleOneLife(a)
-				}
+				handleDigit(i + 1)
 			}
 		}
 		if sysKeys.pressed(0x60) {
-			for _, f := range s.feats {
-				if f.Digit == 0 && f.NeedCtrl == ctrlDown && f.NeedShift == shiftDown {
-					toggleFeature(a, s, f)
-				}
-			}
+			handleDigit(0)
 		}
 
 		// ---- 前台导航：用 ↑↓ 选择 + 回车/空格切换 ----
@@ -757,12 +733,12 @@ func main() {
 		// 与其他界面按键一样走控制台输入，仅在修改器有焦点时生效。
 		{
 			n := len(navList(s))
-			if uiKeys.pressed(vkUp) || uiKeys.pressed(vkW) {
+			if uiKeys.pressed(vkUp) {
 				if n > 0 {
 					a.navCursor = (a.navCursor - 1 + n) % n
 				}
 			}
-			if uiKeys.pressed(vkDown) || uiKeys.pressed(vkS) {
+			if uiKeys.pressed(vkDown) {
 				if n > 0 {
 					a.navCursor = (a.navCursor + 1) % n
 				}

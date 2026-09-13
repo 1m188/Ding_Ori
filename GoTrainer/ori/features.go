@@ -13,20 +13,22 @@ import (
 
 // Feature 一个可开关的功能。
 //
-// 键位约定（只用小键盘，避免与笔记本键盘的 F 键/主键盘区冲突）:
-//   - NeedCtrl=false, NeedShift=false: 小键盘数字键 Digit（1..9, 0）
-//   - NeedCtrl=true,  NeedShift=false: Ctrl + 小键盘数字键 Digit
-//   - NeedCtrl=true,  NeedShift=true : Ctrl+Shift + 小键盘数字键 Digit
+// 键位约定（只用小键盘，避免与笔记本键盘的 F 键/主键盘区冲突）。
+// 现只用**两档**：
+//   - NeedCtrl=false: 小键盘数字键 Digit（1..9, 0）—— 普通/基础功能
+//   - NeedCtrl=true : Ctrl + 小键盘数字键 Digit —— 特殊功能
 //
-// 三档互斥由"两个修饰键状态都要精确匹配"保证:
-// 按 Ctrl+Shift+N 时 NeedCtrl=false 的功能不会触发（false != true）。
+// NeedShift 字段保留，但没有功能使用（曾用于 Ctrl+Shift 档，因 Windows
+// Terminal 默认占用 Ctrl+Shift+1..9 而放弃；见 README §8-23）。
+// 档位互斥仍由"修饰键状态精确匹配"保证：按 Ctrl+N 时 NeedCtrl=false 的
+// 功能不会触发；按住 Shift 时任何 Ctrl 档功能也不会触发。
 //
 // 另支持"前台导航"：修改器窗口在前台时，用 ↑↓ 选择、回车/空格切换
 // （见 UI 层的 navCursor），供没有小键盘的键盘使用。
 type Feature struct {
 	Digit     int  // 1..9 或 0（小键盘数字键 0）
 	NeedCtrl  bool // 是否需按住 Ctrl
-	NeedShift bool // 是否需按住 Shift
+	NeedShift bool // 是否需按住 Shift（当前无功能使用）
 	Name      string
 
 	// FixedTarget 非 nil 表示"固定目标值"模式（UI 显示用）
@@ -39,23 +41,16 @@ type Feature struct {
 	status atomic.Value // string
 }
 
-// NewFeature 小键盘数字键功能。
+// NewFeature 小键盘数字键功能（普通/基础功能）。
 func NewFeature(digit int, name string) *Feature {
 	f := &Feature{Digit: digit, Name: name}
 	f.status.Store("未激活")
 	return f
 }
 
-// NewCtrlFeature Ctrl + 小键盘数字键功能。
+// NewCtrlFeature Ctrl + 小键盘数字键功能（特殊功能）。
 func NewCtrlFeature(digit int, name string) *Feature {
 	f := &Feature{Digit: digit, NeedCtrl: true, Name: name}
-	f.status.Store("未激活")
-	return f
-}
-
-// NewCtrlShiftFeature Ctrl+Shift + 小键盘数字键功能（特殊能力）。
-func NewCtrlShiftFeature(digit int, name string) *Feature {
-	f := &Feature{Digit: digit, NeedCtrl: true, NeedShift: true, Name: name}
 	f.status.Store("未激活")
 	return f
 }
@@ -508,7 +503,7 @@ var (
 	tickersMu sync.RWMutex
 
 	allTickers []ticker
-	oneLife    = NewOneLifeProtect() // 一命保护（Ctrl+小键盘 1）
+	oneLife    = NewOneLifeProtect() // 一命保护（Ctrl+小键盘 5）
 
 	// featureActivators 记录需要自定义激活/关闭副作用的执行器，
 	// 由 UI 层通过 ActivateFeature/DeactivateFeature 调用。
@@ -1127,8 +1122,8 @@ func BuildFeatures() []*Feature {
 		allTickers = append(allTickers, &freezeInt{f: f, get: get, fixed: &t})
 		return f
 	}
-	// 键位分配原则: 每个功能只有一个快捷键；优先填满小键盘 1-9/0（10 个），
-	// 溢出部分再用 Ctrl+小键盘。一命保护占用 Ctrl+小键盘 1（见 oneLife 单例）。
+	// 键位分配原则: 每个功能只有一个快捷键，两档从简到繁——
+	// 小键盘 1-9/0（普通功能）→ Ctrl+小键盘（特殊功能，一命保护排最后）。
 
 	return []*Feature{
 		// ===== 基础能力: 小键盘 1-9/0（顺序编号）=====
@@ -1139,18 +1134,23 @@ func BuildFeatures() []*Feature {
 		newSuperJump(5, 2.5),
 		newInfiniteDoubleJump(6),
 		newSkillPoints(7, 99),
-		// ===== 进阶能力: Ctrl+小键盘（顺序接续）=====
+		// ===== 特殊功能: Ctrl+小键盘（顺序接续）=====
 		newCtrlCounterLock(1, "死亡数归零", deaths, 0),
 		newExplore100(2),
 		newGrantAll(3),
-		// ===== 特殊能力: Ctrl+Shift+小键盘 1（一命保护，见 oneLife）=====
+		// ===== 特殊功能: Ctrl+小键盘 5（一命保护，见 oneLife）=====
 	}
 }
 
-// CtrlOneLifeDigit 一命保护的键位（Ctrl+Shift+小键盘 1）。
-const CtrlOneLifeDigit = 1
+// CtrlOneLifeDigit 一命保护的键位（Ctrl+小键盘 5，追加在 Ctrl 组末尾）。
+//
+// ⚠ 历史：曾用 Ctrl+Shift+小键盘 1/0，都不行——Windows Terminal 默认把
+// Ctrl+Shift+1..9 绑成"新建标签页"（OpenNewTabProfile0..8），按键会被终端
+// 吃掉、根本送不到本程序（表现为"按一下就冒出个新标签页/像修改器退出了"）。
+// 现在统一收敛为两档：小键盘（普通）+ Ctrl+小键盘（特殊），不再用 Ctrl+Shift。
+const CtrlOneLifeDigit = 5
 
 // OneLifeHotkeyLabel 一命保护的键位显示文本。
 func OneLifeHotkeyLabel() string {
-	return fmt.Sprintf("Ctrl+Shift+小键盘 %d", CtrlOneLifeDigit)
+	return fmt.Sprintf("Ctrl+小键盘 %d", CtrlOneLifeDigit)
 }
