@@ -188,6 +188,15 @@ func (r *Runtime) SeinCharacterAddr() uint32 {
 	return r.SeinCharacter
 }
 
+// HasProcess 当前是否绑定了进程。
+// 供"还原类"操作（OnDeactivate 要写回原值）做前置判断: 进程已被 F12 断开
+// （Proc == nil）时不能去写内存，否则会空指针 panic。
+func (r *Runtime) HasProcess() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.Proc != nil
+}
+
 func (r *Runtime) SeinLevelAddr() uint32 {
 	r.mu.Lock()
 	defer r.mu.Unlock()

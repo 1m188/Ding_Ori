@@ -608,7 +608,10 @@ func DeactivateFeature(f *Feature, r *Runtime) {
 		return
 	}
 	// 可还原型执行器: setFloat / multiFloatMul（倍率放大）、
-	// infiniteDoubleJump（能力开关）、soulFlameAnywhere（HoldDownDuration）
+	// infiniteDoubleJump（能力开关）、soulFlameAnywhere（HoldDownDuration）。
+	// 还原要写回游戏内存，必须确认进程仍绑定（F12 会临时 SetProcess(nil)），
+	// 否则 OnDeactivate 里的 r.Proc.* 会空指针 panic。
+	canRevert := r != nil && r.HasProcess()
 	tickersMu.RLock()
 	snapshot := allTickers
 	tickersMu.RUnlock()
@@ -618,7 +621,7 @@ func DeactivateFeature(f *Feature, r *Runtime) {
 			if ex.f != f {
 				continue
 			}
-			if r != nil {
+			if canRevert {
 				ex.OnDeactivate(r)
 			} else {
 				ex.f.have.Store(false)
@@ -628,7 +631,7 @@ func DeactivateFeature(f *Feature, r *Runtime) {
 			if ex.f != f {
 				continue
 			}
-			if r != nil {
+			if canRevert {
 				ex.OnDeactivate(r)
 			}
 			goto done
@@ -636,7 +639,7 @@ func DeactivateFeature(f *Feature, r *Runtime) {
 			if ex.f != f {
 				continue
 			}
-			if r != nil {
+			if canRevert {
 				ex.OnDeactivate(r)
 			}
 			goto done
@@ -644,7 +647,7 @@ func DeactivateFeature(f *Feature, r *Runtime) {
 			if ex.f != f {
 				continue
 			}
-			if r != nil {
+			if canRevert {
 				ex.OnDeactivate(r)
 			}
 			goto done

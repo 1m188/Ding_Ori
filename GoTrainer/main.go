@@ -318,6 +318,22 @@ func (s *session) closeProc() {
 	}
 }
 
+// teardownSession 是**所有"离开运行状态"路径的唯一收尾**（ESC 返回选择、
+// 关闭窗口等），必须先跑一次 DeactivateAll:
+//   - 可还原型（超级跳高度、灵魂链接 HoldDownDuration 等）写回原值；
+//   - 一次性修改型（解锁技能/钥匙/难度/时间/探索等）按设计**不动**。
+//
+// 顺序: 先还原（需要进程句柄）→ 再断进程 → 最后清空 Runtime 地址。
+// 可安全重复调用（DeactivateAll/closeProc 幂等）。
+func teardownSession(s *session) {
+	if s == nil {
+		return
+	}
+	ori.DeactivateAll(s.feats, s.r)
+	s.closeProc()
+	s.r.SetProcess(nil)
+}
+
 type app struct {
 	mu        sync.Mutex
 	sess      *session
@@ -418,6 +434,8 @@ func (a *app) current() *session {
 }
 
 func (a *app) choose(prof ori.Profile) {
+	// 防御: 若仍有遗留会话（正常流程 ESC 已收尾清空），先统一收尾再建新会话。
+	teardownSession(a.current())
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	s := &session{prof: prof, r: &ori.Runtime{}, feats: ori.BuildFeatures()}
@@ -606,6 +624,20 @@ func (a *app) engineLoop(s *session) {
 func main() {
 	a := &app{}
 	a.setMsg("")
+
+	// 退出兜底: 主协程若 panic（未预期路径），也要先做一次统一收尾再退出，
+	// 避免"程序没了但游戏的修改还留着"的未定义状态。
+	defer func() {
+		if rec := recover(); rec != nil {
+			teardownSession(a.current())
+			fmt.Println("内部错误，已清理修改后退出:", rec)
+		}
+	}()
+
+	// 关闭窗口 / 注销 / 关机 → 统一收尾（能复原的复原，一次性修改型不动）。
+	// 注意: 任务管理器"结束任务"收不到该事件，属于不可捕获路径。
+	core.SetCloseHandler(func() { teardownSession(a.current()) })
+
 	ck := newConsoleKeys()
 	// 界面按键: 控制台输入事件（仅本窗口有焦点时才有事件）。
 	// 若控制台输入不可用（标准输入被重定向等），退化为"全局热键 + 游戏前台抑制"。
@@ -674,8 +706,8 @@ func main() {
 			a.help.Store(!a.help.Load())
 		}
 		if escPressed {
-			ori.DeactivateAll(s.feats, s.r)
-			s.closeProc()
+			// 离开运行状态 → 统一收尾（能复原的复原，一次性修改型不动）
+			teardownSession(s)
 			a.mu.Lock()
 			a.sess = nil
 			a.chosen = false
@@ -685,10 +717,12 @@ func main() {
 			continue
 		}
 		if homePressed {
+			// 全关: 不离开会话，只还原/关闭全部功能
 			ori.DeactivateAll(s.feats, s.r)
 			a.setMsg("已关闭全部功能")
 		}
 		if f12Pressed {
+			// 重扫: 只断开重连，功能保持开启；地址在重新附加后刷新
 			s.closeProc()
 			s.r.SetProcess(nil)
 			a.setMsg("已重置，重新附加中…")
