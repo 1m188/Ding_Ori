@@ -9,10 +9,26 @@
     <OutputType>Exe</OutputType>
     <AssemblyName>OriTrainerDE</AssemblyName>
     <RootNamespace>OriTrainerDE</RootNamespace>
+    <RuntimeIdentifier>win-x86</RuntimeIdentifier>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- 两端共享的源码（协议常量等），不是共享程序集 -->
+  <ItemGroup>
+    <Compile Include="..\shared\**\*.cs" LinkBase="Shared" />
+  </ItemGroup>
+
+  <!--
+    SharpMonoInjector 以「源码」方式编入本 exe，不用 ProjectReference：
+      1. 它不在 NuGet 上（已确认搜索无结果），无法 PackageReference。
+      2. 它是 netstandard2.0，作为独立程序集会让输出目录多一个 dll。
+    vendor\ 下只保留注入所需文件，Eject 已移除
+  -->
+  <ItemGroup>
+    <Compile Include="..\..\vendor\SharpMonoInjector\**\*.cs" LinkBase="Vendor" />
   </ItemGroup>
 
 </Project>
