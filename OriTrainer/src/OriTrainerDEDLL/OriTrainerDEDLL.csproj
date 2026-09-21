@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    终极版修改器注入用的 DLL，加载进游戏进程内。
+    目标框架 net35（游戏内置 Mono 2.x，只认 .NET 3.5 程序集），输出 dll。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net35</TargetFramework>
+    <OutputType>Library</OutputType>
+    <AssemblyName>OriTrainerDEDLL</AssemblyName>
+    <RootNamespace>OriTrainerDEDLL</RootNamespace>
+    <PlatformTarget>x86</PlatformTarget>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net35" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>
