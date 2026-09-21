@@ -1,8 +1,13 @@
+using System;
+using System.Diagnostics;
+using System.IO;
+
 namespace OriTrainerDEDLL
 {
-    internal static class Program
+    public static class Program
     {
-        private static void Main()
+        // 注入口：必须 public static 且无参，全名 OriTrainerDEDLL.Program.Load。
+        public static void Load()
         {
         }
     }
