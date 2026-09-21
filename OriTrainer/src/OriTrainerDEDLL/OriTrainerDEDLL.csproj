@@ -9,7 +9,6 @@
     <OutputType>Library</OutputType>
     <AssemblyName>OriTrainerDEDLL</AssemblyName>
     <RootNamespace>OriTrainerDEDLL</RootNamespace>
-    <PlatformTarget>x86</PlatformTarget>
   </PropertyGroup>
 
   <ItemGroup>

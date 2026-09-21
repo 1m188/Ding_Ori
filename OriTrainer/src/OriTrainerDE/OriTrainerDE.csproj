@@ -9,7 +9,6 @@
     <OutputType>Exe</OutputType>
     <AssemblyName>OriTrainerDE</AssemblyName>
     <RootNamespace>OriTrainerDE</RootNamespace>
-    <PlatformTarget>x86</PlatformTarget>
   </PropertyGroup>
 
   <ItemGroup>
