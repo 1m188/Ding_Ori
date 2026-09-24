@@ -11,7 +11,7 @@ namespace OriTrainerDEDLL
 {
     public static class Loader
     {
-        private const string FeatureNamespace = "OriTrainerDEDLL.Features.";
+        private const string FeatureNamespace = "OriTrainerDEDLL.Features";
 
         private static IntPtr _pipe; // 管道句柄
 
@@ -37,9 +37,43 @@ namespace OriTrainerDEDLL
             while (true)
             {
                 Native.ConnectNamedPipe(_pipe, IntPtr.Zero);
+                Shutdown(); // 刚连上：清掉上一次会话可能遗留的状态
                 ReadCommands();
                 // exe 断开后复用同一句柄等待下一次连接，不关闭重建。
                 Native.DisconnectNamedPipe(_pipe);
+                Shutdown(); // 刚断开：等价于"修改器已关闭"，停掉一切持续写入
+            }
+        }
+
+        // 停止全部功能。注入无法卸载（见 vendor/SharpMonoInjector/README.md），
+        // "关闭修改器"在 DLL 侧唯一能做的就是停止持续写内存并注销主线程钩子。
+        //
+        // 命名空间即功能清单：不维护注册表，新增功能类自动被覆盖（约定见 Dispatch）。
+        //
+        // 注意这只是"停止"，不是"撤销"：按各功能的设计，解锁技能 / 三把钥匙 / 难度 /
+        // 能力点数 / 100% 探索 / 重置时间都不还原，InfiniteDash、InfiniteDoubleJump、
+        // UnlockAllAbilities 也刻意不还原 HasAbility。真正会写回原值的只有 SuperJump
+        // 的 5 个跳跃高度和 SoulFlameAnywhere 的 HoldDownDuration。
+        public static void Shutdown()
+        {
+            foreach (Type type in typeof(Loader).Assembly.GetTypes())
+            {
+                if (type.Namespace != FeatureNamespace) continue;
+
+                MethodInfo stop = type.GetMethod("Stop",
+                    BindingFlags.Public | BindingFlags.Static, null, Type.EmptyTypes, null);
+                if (stop == null) continue;
+
+                // 和 Dispatch 一样：单个功能出错不能中断其余功能，更不能让异常
+                // 从后台线程冒出去终止进程（那就是游戏）。
+                try
+                {
+                    stop.Invoke(null, null);
+                }
+                catch (Exception ex)
+                {
+                    Log(type, stop, ex);
+                }
             }
         }
 
@@ -69,7 +103,7 @@ namespace OriTrainerDEDLL
             string[] parts = command.Split(' ');
             if (parts.Length != 2) return;
 
-            Type type = typeof(Loader).Assembly.GetType(FeatureNamespace + parts[0], false);
+            Type type = typeof(Loader).Assembly.GetType(FeatureNamespace + "." + parts[0], false);
             if (type == null) return;
 
             MethodInfo method = type.GetMethod(parts[1],
@@ -83,20 +117,25 @@ namespace OriTrainerDEDLL
             }
             catch (Exception ex)
             {
-                // 反射调用会把功能里抛的异常包一层，真实原因在 InnerException
-                if (ex is TargetInvocationException && ex.InnerException != null)
-                    ex = ex.InnerException;
-
-                // 写日志本身也不能抛：这里是后台线程最后的兜底，再抛出去整个游戏就没了
-                try
-                {
-                    File.AppendAllText(Path.Combine(Path.GetTempPath(), "OriTrainerDEDLL_error.log"),
-                        string.Format("[{0:yyyy-MM-dd HH:mm:ss.fff}] {1}.{2}() 执行失败：{3}: {4}{5}{6}{7}{8}",
-                            DateTime.Now, type.Name, method.Name, ex.GetType().FullName, ex.Message,
-                            Environment.NewLine, ex.StackTrace, Environment.NewLine, Environment.NewLine));
-                }
-                catch { }
+                Log(type, method, ex);
             }
+        }
+
+        // 记一次功能执行失败。写日志本身也不能抛：调用方在后台线程上，再抛出去整个游戏就没了。
+        private static void Log(Type type, MethodInfo method, Exception ex)
+        {
+            // 反射调用会把功能里抛的异常包一层，真实原因在 InnerException
+            if (ex is TargetInvocationException && ex.InnerException != null)
+                ex = ex.InnerException;
+
+            try
+            {
+                File.AppendAllText(Path.Combine(Path.GetTempPath(), "OriTrainerDEDLL_error.log"),
+                    string.Format("[{0:yyyy-MM-dd HH:mm:ss.fff}] {1}.{2}() 执行失败：{3}: {4}{5}{6}{7}{8}",
+                        DateTime.Now, type.Name, method.Name, ex.GetType().FullName, ex.Message,
+                        Environment.NewLine, ex.StackTrace, Environment.NewLine, Environment.NewLine));
+            }
+            catch { }
         }
     }
 }
