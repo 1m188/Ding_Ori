@@ -71,12 +71,18 @@ namespace SharpMonoInjector
             if ((_handle = Native.OpenProcess(ProcessAccessRights.PROCESS_ALL_ACCESS, false, process.Id)) == IntPtr.Zero)
                 throw new InjectorException("Failed to open process", new Win32Exception(Marshal.GetLastWin32Error()));
 
-            Is64Bit = ProcessUtils.Is64BitProcess(_handle);
+            try {
+                Is64Bit = ProcessUtils.Is64BitProcess(_handle);
 
-            if (!ProcessUtils.GetMonoModule(_handle, out _mono))
-                throw new InjectorException("Failed to find mono.dll in the target process");
+                if (!ProcessUtils.GetMonoModule(_handle, out _mono))
+                    throw new InjectorException("Failed to find mono.dll in the target process");
 
-            _memory = new Memory(_handle);
+                _memory = new Memory(_handle);
+            } catch {
+                // See the note on the int constructor below.
+                Native.CloseHandle(_handle);
+                throw;
+            }
         }
 
         public Injector(int processId)
@@ -90,12 +96,25 @@ namespace SharpMonoInjector
             if ((_handle = Native.OpenProcess(ProcessAccessRights.PROCESS_ALL_ACCESS, false, process.Id)) == IntPtr.Zero)
                 throw new InjectorException("Failed to open process", new Win32Exception(Marshal.GetLastWin32Error()));
 
-            Is64Bit = ProcessUtils.Is64BitProcess(_handle);
+            try {
+                Is64Bit = ProcessUtils.Is64BitProcess(_handle);
 
-            if (!ProcessUtils.GetMonoModule(_handle, out _mono))
-                throw new InjectorException("Failed to find mono.dll in the target process");
+                if (!ProcessUtils.GetMonoModule(_handle, out _mono))
+                    throw new InjectorException("Failed to find mono.dll in the target process");
 
-            _memory = new Memory(_handle);
+                _memory = new Memory(_handle);
+            } catch {
+                // NOTE: upstream leaks the process handle here.
+                //
+                // When a constructor throws, the caller never receives the object, so
+                // Dispose() is never called and _handle is never closed. That was harmless
+                // upstream (inject once, or give up), but OriTrainerDE retries injection
+                // every 200ms until the game has finished loading mono.dll — a task that
+                // measurably took a game that was still starting up from ~0 leaked handles
+                // to 1 per attempt, without bound.
+                Native.CloseHandle(_handle);
+                throw;
+            }
         }
 
         public Injector(IntPtr processHandle, IntPtr monoModule)
