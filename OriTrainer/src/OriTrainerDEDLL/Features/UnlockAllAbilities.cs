@@ -43,9 +43,18 @@ namespace OriTrainerDEDLL.Features
     // 刻意不还原也避免 SeinNestedPrefab.IsInstantiated 置 false 时 Destroy() 掉组件，
     // 导致"关了再开就失效"。
     //
-    // ⚠ 11 项里只有 9 项有对应的 SeinNestedPrefab（Bash / ChargeJump / Climb / Dash /
-    //   DoubleJump / Glide / Grenade / Stomp / WallJump）。SpiritFlame 与 ChargeFlame
-    //   没有 nested prefab，它们的组件由别处创建，EnsureRightPrefabs 管不到
+    // ⚠ 11 项里只有 9 项由 EnsureRightPrefabsAreThereForAbilities 实例化：
+    //     WallJump / Stomp / DoubleJump / ChargeJump / Climb / Bash / Glide / Dash / Grenade
+    //   （按该函数 IL 里 set_IsInstantiated 的调用顺序。它顺带还会置 WallSlide，
+    //    但那是 WallJump 的附带项，不单独对应哪一项能力。）
+    //   不在其中的是 SpiritFlame 和 ChargeFlame，原因【各不相同】：
+    //     · SpiritFlame —— SeinPrefabFactory 有它的 nested prefab，但
+    //       SeinPrefabFactory.Awake() 已经自动实例化了（实测 Awake 里置了 13 个），
+    //       所以不需要这个函数再管。
+    //     · ChargeFlame —— SeinPrefabFactory 里根本没有它的 nested prefab 字段，
+    //       组件由别处创建，这个函数管不到。
+    //   另注：Climb 对应的 prefab 字段名叫 GrabWall（"抓住墙"），不是 Climb，
+    //   按名字找会以为它没被覆盖。
     public static class UnlockAllAbilities
     {
         private static Action _hook; // 保留引用以便 Stop 时注销
