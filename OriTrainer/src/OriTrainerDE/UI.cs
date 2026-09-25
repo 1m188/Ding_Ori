@@ -77,22 +77,22 @@ namespace OriTrainerDE
         {
             b.Append("  ");
 
-            if (Status.Pid == 0)
+            if (Status.Connection == ConnectionState.NoGame)
             {
                 b.Append(Terminal.Red).Append("○ 未检测到游戏进程").Append(Terminal.Reset);
             }
             else
             {
-                switch (Status.Injection)
+                switch (Status.Connection)
                 {
-                    case InjectionState.Done:
-                        b.Append(Terminal.Green).Append("● 已注入 (PID ").Append(Status.Pid).Append(')');
+                    case ConnectionState.Connected:
+                        b.Append(Terminal.Green).Append("● 已连接 (PID ").Append(Status.Pid).Append(')');
                         break;
-                    case InjectionState.Running:
+                    case ConnectionState.Injecting:
                         b.Append(Terminal.Yellow).Append("◌ 正在注入… (PID ").Append(Status.Pid).Append(')');
                         break;
                     default:
-                        b.Append(Terminal.Yellow).Append("○ 未注入 (PID ").Append(Status.Pid).Append(')');
+                        b.Append(Terminal.Yellow).Append("○ 未连接 (PID ").Append(Status.Pid).Append(')');
                         break;
                 }
                 b.Append(Terminal.Reset);
