@@ -42,9 +42,17 @@ namespace OriTrainerDE
     {
         private const int PollMs = 10;
 
-        private const int VkHome = 0x24;
-        private const int VkNumPad0 = 0x60; // 小键盘 0；1..9 依次为 0x61..0x69
-        private const int VkControl = 0x11;
+        // 按键相关的常量都在这里：别处不要再写裸数字键码。
+        public const int VkHome = 0x24;
+        public const int VkNumPad0 = 0x60; // 小键盘 0；1..9 依次为 0x61..0x69
+        public const int VkControl = 0x11;
+
+        // 小键盘编号 1..9 → 虚拟键码。让"编号→键码"的换算只此一处，
+        // 免得 Status 和主循环各自 +0x60 一次、改了键位就两边不一致。
+        public static int NumPadKey(int digit)
+        {
+            return VkNumPad0 + digit;
+        }
 
         // 唯一的上报白名单。要加键就在这里加一行 —— 除此之外没有别的地方需要改。
         private static readonly int[] Watched =
