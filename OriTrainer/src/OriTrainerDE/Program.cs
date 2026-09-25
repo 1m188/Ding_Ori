@@ -1,79 +1,66 @@
 /*
     修改器主程序
 
-    ---- 连接模型：开局连一次，全程持有 ----
-    管道在启动时连接一次并一直持有到退出。这是 DLL 侧 Shutdown 语义所要求的：
-    Loader.Serve 每次"连上"和"断开"都会停止全部功能，所以"断开"必须只发生在
-    修改器真正退出时。反过来说，**一次命令连一次**的用法在这里是不成立的 ——
-    那样每条命令刚执行的下一秒就被断开时的 Shutdown 撤销掉。
+    ---- 连接模型：全程持有一条长连接 ----
+    管道由 PipeClient 的后台线程维护：连上后一直持有，断了自动重连，游戏重启自动
+    接上新进程。主循环不持有管道对象，只管"要不要发命令"。
+
+    这是 DLL 侧 Shutdown 语义所要求的：Loader.Serve 每次"连上"和"断开"都会停止
+    全部功能，所以"断开"必须只发生在修改器真正退出（或游戏进程消失）时。
+    反过来说，**一次命令连一次**的用法在这里是不成立的 —— 那样每条命令刚执行的
+    下一秒就被断开时的 Shutdown 撤销掉。
 
     ---- 主循环 ----
-    每 10ms 一轮：取空按键队列 → 按状态改功能开关 → 重画界面。
+    每 10ms 一轮：同步连接状态 → 取空按键队列 → 按状态改功能开关 → 重画界面。
     按键判断（哪个键对应哪个功能、HOME 全开全关）都在这里，Keyboard 和 UI 都不参与。
+
+    这里**没有"启动阶段"**：连接由后台线程持续维护，所以启动时会发生的事运行中
+    也随时会发生，全都走同一条路 —— 后台线程负责收敛连接，主循环负责画出来。
 */
 
 using System;
-using System.Diagnostics;
-using System.IO.Pipes;
-using System.Text;
 using System.Threading;
-using OriTrainerShared;
 
 namespace OriTrainerDE
 {
     internal static class Program
     {
-        private const string ProcessName = "oriDE"; // 游戏进程名（不带 .exe）
         private const int LoopMs = 10; // 每轮循环间隔
+
+        // 上一轮是否处于已连接状态，用于识别"断开"这个边沿。
+        private static bool _connected;
 
         private static void Main()
         {
-            // ---- 找到游戏进程 ----
-            Process[] games = Process.GetProcessesByName(ProcessName);
-            if (games.Length > 0) Status.Pid = games[0].Id;
-
-            // ---- 取得命令管道 ----
-            NamedPipeClientStream pipe = null;
-            if (Status.Pid != 0)
-            {
-                Status.Injection = InjectionState.Running;
-                try
-                {
-                    pipe = PipeClient.Attach(Status.Pid);
-                    Status.Injection = InjectionState.Done;
-                }
-                catch
-                {
-                    // 注入失败不退出：界面会显示"未注入"，先让用户看到程序还在跑
-                    Status.Injection = InjectionState.None;
-                }
-            }
-
-            Terminal.Enter(); // 失败就直接抛，不在这里兜：没有控制台就画不了界面
-            Keyboard.Start();
+            Terminal.Enter();   // 先拿输出设备：失败就直接抛，此刻什么都还没启动，无需清理。
+            Keyboard.Start();   // 起后台线程，立即返回
+            PipeClient.Start(); // 起后台线程，立即返回
 
             try
             {
-                Loop(pipe);
+                Loop();
             }
             finally
             {
-                // 退出即断开管道，DLL 会借这次断开停止全部功能（见 Loader.Serve）
-                pipe?.Dispose();
+                // 这里是纯防御：正常退出（关窗口）会被直接终止，不会走到 finally。
+                // 那种情况下管道由内核关闭，DLL 侧 ReadFile 失败后照样走
+                // DisconnectNamedPipe + Shutdown，功能一样全停。
+                PipeClient.Stop();
                 Keyboard.Stop();
                 Terminal.Leave();
             }
         }
 
-        private static void Loop(NamedPipeClientStream pipe)
+        private static void Loop()
         {
             string last = null;
 
             while (true)
             {
-                HandleKeys(pipe);
+                Sync();
+                HandleKeys();
 
-                // 状态只在按键时变化，所以同一帧不必重复写终端。
+                // 状态只在按键或连接变化时变动，所以同一帧不必重复写终端。
                 // 不比较的话这里是每秒 100 次整屏重写，白白闪烁、白烧 CPU。
                 string frame = UI.Build();
                 if (frame != last)
@@ -86,15 +73,28 @@ namespace OriTrainerDE
             }
         }
 
-        private static void HandleKeys(NamedPipeClientStream pipe)
+        // 跟随 PipeClient 维护的连接状态。
+        //
+        // 断开的瞬间要把全部开关复位：DLL 侧在断开时已经 Shutdown 停掉了一切，
+        // 界面若还显示开着就是骗人。这也是"发送成功但没送达"的唯一纠正手段 ——
+        // 那种情况下 Feature.On 已经被置为发送后的值，而游戏里其实没生效。
+        private static void Sync()
+        {
+            bool now = Status.Connection == ConnectionState.Connected;
+
+            if (_connected && !now)
+                foreach (Feature f in Status.Features) f.On = false;
+
+            _connected = now;
+        }
+
+        private static void HandleKeys()
         {
             while (Keyboard.TryRead(out KeyEvent e))
             {
-                if (pipe == null) continue; // 没有管道（未找到游戏 / 注入失败），按键无处可发
-
                 if (e.VirtualKey == Keyboard.VkHome)
                 {
-                    ToggleAll(pipe);
+                    ToggleAll();
                     continue;
                 }
 
@@ -102,14 +102,14 @@ namespace OriTrainerDE
                 {
                     if (Keyboard.NumPadKey(f.Digit) != e.VirtualKey || f.NeedCtrl != e.Ctrl) continue;
 
-                    Send(pipe, f, !f.On);
+                    Send(f, !f.On);
                     break;
                 }
             }
         }
 
         // HOME：还有没开的就全部打开，已经全开就全部关闭。
-        private static void ToggleAll(NamedPipeClientStream pipe)
+        private static void ToggleAll()
         {
             bool allOn = true;
             foreach (Feature f in Status.Features)
@@ -117,7 +117,7 @@ namespace OriTrainerDE
 
             foreach (Feature f in Status.Features)
                 if (allOn ? f.On : !f.On)
-                    Send(pipe, f, !allOn);
+                    Send(f, !allOn);
         }
 
         // 发一条命令并更新状态。
@@ -125,24 +125,12 @@ namespace OriTrainerDE
         // on = true 发 "Name Start"，false 发 "Name Stop"；写成功后才改 f.On，
         // 免得界面显示的开关和实际发出的命令不一致。
         //
-        // 管道断开时（游戏重启、游戏退出）写入会抛异常，这里把状态改回"未注入"
-        // 并在界面上显示出来 —— 静默吞掉的话，用户会以为是热键失灵或功能本身有问题。
-        // 重连逻辑尚未实现（后续再做），所以此后按键都不会生效。
-        private static void Send(NamedPipeClientStream pipe, Feature f, bool on)
+        // 发送失败（未连接 / 游戏刚退出）什么都不做：按键丢弃，不排队、不在重连后
+        // 补发 —— 补发会让用户按了三下、连上后突然自己开三个功能，比丢键更吓人。
+        private static void Send(Feature f, bool on)
         {
-            byte[] command = Encoding.UTF8.GetBytes(
-                (on ? f.StartCommand : f.StopCommand) + Constants.Terminator);
-
-            try
-            {
-                pipe.Write(command, 0, command.Length);
-                pipe.Flush();
+            if (PipeClient.TrySend(on ? f.StartCommand : f.StopCommand))
                 f.On = on;
-            }
-            catch
-            {
-                Status.Injection = InjectionState.None;
-            }
         }
     }
 }
