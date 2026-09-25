@@ -29,18 +29,6 @@ namespace OriTrainerDE
         private const string Esc = "\u001b";
 
         // ---- 颜色 ----
-        // 各常量的实际作用，覆盖界面里所有需要区分的语义：
-        //   Title  标题行
-        //   Box    分隔线 ────────
-        //   Dim    按键提示、未激活状态、次要说明
-        //   Text   功能名、未勾选的 [ ]
-        //   Green  已勾选的 [x]、已注入、保护中、发送成功
-        //   Red    未检测到游戏、发送失败
-        //   Yellow 过渡态：未注入（首次操作时自动注入）
-        //   Cyan   光标 ▶（当前选中项）
-        //
-        // 没有蓝色：绿/红已经占掉"开"和"错"两个语义，而"当前选中"必须和它们同时出现
-        // 在屏幕上，得是第三种色相；蓝在默认黑底上对比度最低，所以选中给了更醒目的青。
         public const string Reset = Esc + "[0m";             // 复原成默认前景色
         public const string Title = Esc + "[1;38;5;208m";    // 亮橙
         public const string Box = Esc + "[38;5;240m";        // 灰
@@ -49,7 +37,6 @@ namespace OriTrainerDE
         public const string Green = Esc + "[92m";
         public const string Red = Esc + "[91m";
         public const string Yellow = Esc + "[93m";
-        public const string Cyan = Esc + "[96m";
 
         // 进入界面模式：切备用屏幕缓冲区 → 隐藏光标 → 关自动换行 → 清屏。
         //
