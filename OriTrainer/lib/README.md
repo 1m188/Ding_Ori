@@ -13,15 +13,16 @@
 
 文件校验值（SHA256，可用来确认与游戏本体是否一致）：
 
-| 文件 | 大小（字节） | SHA256 |
-|---|---:|---|
-| `Assembly-CSharp.dll` | 2,013,184 | `6F3A0384059D38DA3183AD7D849C6BD352EA5555F3C4D019D6CA46453D9E8EAA` |
-| `UnityEngine.dll` | 967,680 | `F98945F391961D1D86D7E891834137E584DB7678270F68365195A9D48AEC4B47` |
-| `Assembly-CSharp-firstpass.dll` | 35,328 | `E817AD34C43B16695D7877C78CD01C54EBAB1735B632BA5B886648EF1DF06DB5` |
+| 文件 | SHA256 |
+|---|---|
+| `Assembly-CSharp.dll` | `6F3A0384059D38DA3183AD7D849C6BD352EA5555F3C4D019D6CA46453D9E8EAA` |
+| `UnityEngine.dll` | `F98945F391961D1D86D7E891834137E584DB7678270F68365195A9D48AEC4B47` |
+| `Assembly-CSharp-firstpass.dll` | `E817AD34C43B16695D7877C78CD01C54EBAB1735B632BA5B886648EF1DF06DB5` |
+
 
 ## 各自的作用
 
-### `Assembly-CSharp.dll`（约 2.0 MB）
+### `Assembly-CSharp.dll`
 
 游戏自己的全部逻辑代码，是修改器的主要操作对象。里面包含：
 
@@ -32,13 +33,13 @@
 `Game.Characters.Sein` 是 `public static` 字段，注入后直接读写即可，
 不需要像旧版 Go 修改器那样扫描特征码定位地址。
 
-### `UnityEngine.dll`（约 0.95 MB）
+### `UnityEngine.dll`
 
 Unity 引擎的运行库。修改器里凡是碰到 `GameObject`、`Transform`、`Vector3`、
 `Time` 之类的类型，都由它提供。多数情况下并不直接"用"它做功能，
 但只要代码里访问 `sein.gameObject`，编译期就必须能解析这个引用。
 
-### `Assembly-CSharp-firstpass.dll`（约 35 KB）
+### `Assembly-CSharp-firstpass.dll`
 
 游戏的 firstpass 程序集，存放 Unity 的 Plugins 目录下会被更早编译的代码。
 目前功能实现尚未用到，**为减少后续返工先一并复制**。若确定用不到可以删除，
@@ -67,9 +68,9 @@ Unity 引擎的运行库。修改器里凡是碰到 `GameObject`、`Transform`�
 
 它表示「编译期解析类型用，但不要复制到输出目录」。
 
-若设为 `true`（默认值），这 3 MB 的文件会被复制进 `bin\`，后果有两个：
+若设为 `true`（默认值），这些程序集会被复制进 `bin\`，后果有两个：
 
-1. 发布包平白多出 3 MB 无用内容；
+1. 发布包平白多出无用的副本；
 2. 更严重的是，若这些副本被放到游戏目录附近，游戏可能加载到副本而非原版，
    造成难以排查的问题。
 
@@ -90,8 +91,7 @@ Unity 引擎的运行库。修改器里凡是碰到 `GameObject`、`Transform`�
 ## 载荷不会因此变大
 
 引用游戏程序集**不会**把游戏代码编进 `OriTrainerDEDLL.dll`。
-实测：一个真正操作 `Game.Characters.Sein` 的载荷编译出来只有 **4 KB**，
-而游戏程序集合计约 3 MB。
+载荷比游戏程序集本身小两个数量级。
 
 原因是编译产物里只记录「类型名 + 成员签名」的引用条目（TypeRef / MemberRef），
 不含任何实现体。运行时由游戏进程内的 Mono 按名字解析到已经加载的游戏程序集。
