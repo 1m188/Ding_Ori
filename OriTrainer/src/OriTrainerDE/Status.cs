@@ -1,7 +1,9 @@
 /*
-    功能表：修改器里全部功能的名称、状态、命令与热键，是功能相关数据的唯一来源。
+    全局状态：功能表（每个功能的名称、热键、开关）与程序状态（游戏 pid、注入进度）。
 
-    为什么是数组 + 线性查找，而不是"按键 → 功能"的字典：
+    全部可变状态只有这一处。
+
+    为什么功能表是数组 + 线性查找，而不是"按键 → 功能"的字典：
       1. 界面要按顺序列出全部功能，HOME 全开/全关也要遍历全部功能 —— 有序集合
          无论如何都得有，字典只会变成第二份需要同步的映射。
       2. 字典的 key 不能是单个虚拟键：小键盘 1 与 Ctrl+小键盘 1 的 VK 都是 0x61，
@@ -18,6 +20,14 @@ using OriTrainerShared;
 
 namespace OriTrainerDE
 {
+    // 载荷注入进度。
+    internal enum InjectionState
+    {
+        None,    // 找到了游戏，但载荷还没注入（首次发命令时会自动注入）
+        Running, // 正在注入
+        Done,    // 已注入，命令管道已连通
+    }
+
     internal sealed class Feature
     {
         // 命令名。必须与 DLL 侧 OriTrainerDEDLL.Features 下的类名逐字一致 ——
@@ -50,7 +60,7 @@ namespace OriTrainerDE
         // 放在这里是为了让"编号 → 虚拟键"的换算和热键定义待在一起。
         public int VirtualKey { get { return 0x60 + Digit; } }
 
-        public string HotkeyLabel { get { return (NeedCtrl ? "Ctrl+小键盘 " : "小键盘 ") + Digit; } }
+        public string HotkeyLabel { get { return (NeedCtrl ? "Ctrl + 小键盘 " : "小键盘 ") + Digit; } }
 
         // 反转发一条命令。On 只在写成功后翻转，写失败时保持原状，
         // 免得界面显示的开关状态和实际发出的命令不一致。
@@ -66,11 +76,17 @@ namespace OriTrainerDE
         }
     }
 
-    internal static class Features
+    internal static class Status
     {
+        // 游戏进程 ID；0 表示还没找到游戏进程。
+        public static int Pid;
+
+        // 载荷注入进度。
+        public static InjectionState Injection;
+
         // 顺序即界面顺序：先小键盘（普通功能），再 Ctrl+小键盘（特殊功能）。
         // 与 Go 版终极版的键位一致。
-        public static readonly Feature[] All =
+        public static readonly Feature[] Features =
         {
             // ===== 普通功能：小键盘 =====
             new Feature("UnlimitedLife",      "无限生命",               1),
