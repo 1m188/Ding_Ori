@@ -1,0 +1,97 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    测试项目：把产品源码【编进来】而不是引用 exe。
+
+    [为什么不用 ProjectReference]
+    PipeClient / Status / Keyboard / UI 全是 internal，引用 OriTrainerDE.exe
+    拿不到它们（除非给产品加 InternalsVisibleTo，那是为测试改动产品代码）。
+    把源码文件直接 Compile 进来，internal 在同一程序集内天然可见，
+    产品侧零改动 —— 这是本项目测到真实代码的前提。
+
+    [Program.cs 为什么不在列表里]
+    它有自己的 Main，会和本项目的 Main 冲突。这是可接受的：
+    与本项目无关的 E2E 本来就应该跑【真实构建出来的 OriTrainerDE.exe】，
+    而不是把主循环编进来假装是它（见 Suites/E2ESuite.cs）。
+
+    [注意 XML 语法]
+    注释里不能出现连续两个连字符，所以这里用方括号做分隔，不用长横线。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>OriTrainerTests</AssemblyName>
+    <RootNamespace>OriTrainerTests</RootNamespace>
+    <PlatformTarget>x86</PlatformTarget>
+    <RuntimeIdentifier>win-x86</RuntimeIdentifier>
+    <LangVersion>7.3</LangVersion>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <!-- 测试项目不发布，关掉文档警告噪音 -->
+    <NoWarn>$(NoWarn);CS0649</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- 本项目自己的代码 -->
+  <ItemGroup>
+    <Compile Include="*.cs" />
+    <Compile Include="Suites\*.cs" />
+    <Compile Include="Support\*.cs" />
+  </ItemGroup>
+
+  <!-- 产品源码（编进来，不是引用）-->
+  <ItemGroup>
+    <Compile Include="..\..\src\OriTrainerDE\PipeClient.cs" />
+    <Compile Include="..\..\src\OriTrainerDE\Status.cs" />
+    <Compile Include="..\..\src\OriTrainerDE\Keyboard.cs" />
+    <Compile Include="..\..\src\shared\Constants.cs" />
+    <Compile Include="..\..\vendor\SharpMonoInjector\**\*.cs" LinkBase="Vendor" />
+  </ItemGroup>
+
+  <!--
+    假游戏与截图工具随测试项目一起构建，并被复制到测试输出目录。
+    假游戏【必须】叫 oriDE.exe（PipeClient 按进程名扫描），
+    并额外复制一份到 FakeGame\ 供"日志模式"用 —— 那种模式下
+    日志路径由进程主模块目录推出，即 FakeGame\OriDE_Data\output_log.txt。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\FakeGame\FakeGame.csproj">
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
+    <ProjectReference Include="..\Grab\Grab.csproj">
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
+  </ItemGroup>
+
+  <!--
+    被测的真实 exe：只用来保证构建顺序，不引用其程序集。
+    E2E 直接启动它的输出文件。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\OriTrainerDE\OriTrainerDE.csproj">
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <OutputItemType>TestedExe</OutputItemType>
+    </ProjectReference>
+  </ItemGroup>
+
+  <Target Name="StageTestHelpers" AfterTargets="Build">
+    <!-- 兄弟项目的输出路径。$(MSBuildThisFileDirectory) 已含末尾反斜杠 -->
+    <PropertyGroup>
+      <FakeGameOut>$(MSBuildThisFileDirectory)..\FakeGame\bin\$(Configuration)\net48\win-x86\oriDE.exe</FakeGameOut>
+      <GrabOut>$(MSBuildThisFileDirectory)..\Grab\bin\$(Configuration)\net48\win-x86\Grab.exe</GrabOut>
+    </PropertyGroup>
+
+    <Error Condition="!Exists('$(FakeGameOut)')" Text="假游戏没有构建出来：$(FakeGameOut)" />
+    <Error Condition="!Exists('$(GrabOut)')" Text="Grab 没有构建出来：$(GrabOut)" />
+
+    <!-- 管道模式：放在测试输出根目录 -->
+    <Copy SourceFiles="$(FakeGameOut)" DestinationFolder="$(OutDir)" />
+    <Copy SourceFiles="$(GrabOut)" DestinationFolder="$(OutDir)" />
+
+    <!-- 日志模式：单独的 FakeGame 目录，以便日志落在 FakeGame\OriDE_Data\ -->
+    <Copy SourceFiles="$(FakeGameOut)" DestinationFolder="$(OutDir)FakeGame" />
+  </Target>
+
+</Project>

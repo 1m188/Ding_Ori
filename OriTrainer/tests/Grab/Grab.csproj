@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    截图工具：attach 到目标 pid 的控制台，把可见区域逐行读出、以 UTF-8 写文件。
+
+    为什么必须是【独立进程】：编排进程要在测试过程中反复截图，若它自己
+    FreeConsole / AttachConsole 来回切，切换期间往 stdout 写字会把进程打崩
+    （实测 0xC0000005）。隔离到短命子进程里就没有这个问题。
+
+    为什么要绕过 stdout：本进程 stdout 被父进程重定向捕获，
+    而重定向句柄的编码不是 UTF-8/UTF-16，中文会被按单字节拆开（实测全成乱码）。
+    所以显式以 UTF-8 落盘，父进程再按 UTF-8 读，绕开控制台代码页。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>Grab</AssemblyName>
+    <RootNamespace>GrabTool</RootNamespace>
+    <PlatformTarget>x86</PlatformTarget>
+    <RuntimeIdentifier>win-x86</RuntimeIdentifier>
+    <LangVersion>7.3</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>
