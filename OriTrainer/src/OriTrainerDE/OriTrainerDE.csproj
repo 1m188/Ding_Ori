@@ -12,6 +12,14 @@
     <RuntimeIdentifier>win-x86</RuntimeIdentifier>
   </PropertyGroup>
 
+  <!--
+    要求管理员权限。理由与实测边界见 app.manifest 内的注释。
+    一句话：注入需要 PROCESS_ALL_ACCESS，requireAdministrator 把完整性级别关系一次锁死。
+  -->
+  <PropertyGroup>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
   </ItemGroup>

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+    以管理员权限运行 (requireAdministrator)。
+
+    [为什么提权]
+    SharpMonoInjector 打开目标进程时请求的是 PROCESS_ALL_ACCESS，拿不到就不注入。
+    Windows 的规则是：高完整性级别（IL）可以打开低 IL，低 IL 打不开高 IL，同级可以。
+    所以只要本程序的 IL 不低于游戏，注入就有门路；要求管理员就直接锁定了这一点，
+    不必去猜游戏当时是 Medium 还是 High。
+
+    实测环境（本机）：账户是内置 Administrator、且 FilterAdministratorToken=0
+    （内置管理员不受 UAC 过滤），所以 explorer / Steam / 游戏全都跑在 High IL，
+    双击本程序同样得到 High IL —— 这种情况加不加此文件行为一致，也不会弹 UAC。
+
+    [诚实说明：没有证明"非提权就一定失败"]
+    本机所有进程都是 High IL，构造不出"本程序 Medium、游戏 High"的真机场景，
+    因此"不提权必然 ACCESS_DENIED"并未被实测证实。
+    保留 requireAdministrator 的理由是它把 IL 关系一次性锁死，消掉整类不确定性；
+    代价只是在受 UAC 过滤的账户上多一次确认框。
+
+    [为什么用 manifest 而不是运行时自检]
+    万一真落到 IL 不足的情况，失败是永久的：PID 一直在、进程一直扫得到、
+    管道永远建不出来，界面就永远停在“未连接”，重启游戏或修改器都不会改变。
+    与其让它在注入那一步悄悄失败，不如启动时就把权限要到手。
+
+    [对已提权的账户没有影响]
+    若当前账户本就是内置 Administrator 且未启用 UAC 过滤
+    （FilterAdministratorToken=0，RID 500），双击不会弹提示，行为与加此文件前完全一致。
+
+    [下面这行不能删]
+    assemblyIdentity 是 SDK 默认 manifest 里就有的（name="MyApplication.app"）。
+    自定义 manifest 若缺了它，程序根本起不来，会报“并行配置不正确”（SxS 失败）。
+
+    [XML 语法坑]
+    注释内不能出现连续两个连字符，所以本文件的分隔线用方括号而不是长横线，
+    写成分隔线会导致 manifest 解析失败、程序无法启动。
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity version="1.0.0.0" name="MyApplication.app"/>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
+    <security>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+</assembly>
