@@ -91,14 +91,5 @@ namespace OriTrainerDE
             new Feature("GrantKeys",          "获得三把钥匙",        5, true),
             new Feature("OneLifeProtect",     "一命保护（死亡不清档）", 6, true),
         };
-
-        // 按热键找功能。Keyboard 监听模块收到按键后调这个；没绑定则返回 null。
-        public static Feature Find(int digit, bool ctrl)
-        {
-            foreach (Feature f in All)
-                if (f.Digit == digit && f.NeedCtrl == ctrl) return f;
-
-            return null;
-        }
     }
 }
