@@ -32,6 +32,29 @@
     "游戏进程活着 ⟹ 管道一定存在，且一定有人在读"。后者由 Loader.Serve 的死循环
     保证 —— 那个线程一旦退出，管道句柄还在、进程也还在，进程扫描发现不了，
     于是永远连不上也永远不重连。Loader.Serve 的 try/catch 就是为此存在。
+
+    ---- 注入前必须先等托管运行时就绪 ----
+    这是本项目踩过的最贵的一个坑，务必看懂再改。
+
+    mono.dll 在进程起来约 40ms 就映射好了，但托管运行时要到约 500ms 才装载完。
+    在这中间的窗口里注入，mono_runtime_invoke 会在 mono_thread_attach 里解引用
+    一个尚未初始化的指针 —— Mono 以 0xC0000005 抛出、无人接管，游戏当场崩掉。
+    实测崩溃栈上的非模块地址（0x065D000C）正是 injector 自己那段 stub，
+    偏移 +12 恰好是 "call mono_thread_attach" 的返回地址。
+
+    为什么是"等"而不是"探"：在目标进程里跑代码去判断就绪，本身就是崩溃的来源
+    —— 崩掉的那次就是拿到了一个看着像样、实则半成品的 root domain。
+    所以判据只能取【游戏自己写的东西】：它每次启动都会清空
+    OriDE_Data\output_log.txt，并在运行时装载完时写下 ReadyMarker。
+
+    两个条件缺一不可：
+      1. 日志的写入时间晚于进程启动。清空发生在约 50ms 处，在那之前文件里是
+         【上一次运行】的内容，同样含就绪标记 —— 只看内容会在 0ms 就误判就绪，
+         比不检查还糟。
+      2. 内容含就绪标记，即运行时真正装载完毕。
+
+    先开游戏、后开修改器时这两个条件立刻成立，等于没有延迟；先开修改器则最多
+    多等约 0.7 秒。这个代价换的是"游戏不会被修改器打崩"。
 */
 
 using System;
@@ -59,6 +82,14 @@ namespace OriTrainerDE
 
         private const int ErrorFileNotFound = 2; // WaitNamedPipe 报这个才是"管道不存在"
 
+        // 托管运行时就绪标记：Unity 在托管程序集全部装载完之后写进 output_log.txt。
+        // 详见文件头"注入前必须先等托管运行时就绪"。
+        private const string ReadyMarker = "Completed reload";
+
+        // 日志相对游戏 exe 的位置。exe 在 <游戏目录>\oriDE.exe，
+        // 日志在 <游戏目录>\OriDE_Data\output_log.txt。
+        private const string LogRelativePath = "OriDE_Data\\output_log.txt";
+
         private static readonly object _gate = new object();
 
         // 当前连接；null 表示没有。只有后台线程写。
@@ -66,6 +97,11 @@ namespace OriTrainerDE
 
         // 已经跑过 Load() 的进程；0 表示还没有。用于防止对同一个进程重复注入。
         private static int _injectedPid;
+
+        // 当前游戏进程的启动时刻（UTC）与日志路径，随进程一起更新。
+        // 日志的"这次是新的"就靠跟这个时间比。
+        private static DateTime _gameStartUtc;
+        private static string _logPath;
 
         private static volatile bool _running;
 
@@ -128,7 +164,8 @@ namespace OriTrainerDE
         // 一次状态巡检：把"此刻应该处于什么连接状态"收敛到位。
         private static void Tick()
         {
-            int pid = FindGame();
+            Process game = FindGame();
+            int pid = game == null ? 0 : game.Id;
 
             // 换了进程（含游戏退出，此时 pid 为 0）：旧管道一律作废，注入记录也一起清 ——
             // 新进程必然是另一个进程，绝不可能被本程序注入过。
@@ -138,7 +175,18 @@ namespace OriTrainerDE
                 Drop();
                 Status.Pid = pid;
                 _injectedPid = 0;
+
+                _gameStartUtc = DateTime.MinValue;
+                _logPath = null;
             }
+
+            // 就绪判断的两个依据都取自进程对象，而读取它们可能失败（权限、时机）。
+            // 所以不做成"换进程时读一次"，而是【缺了就补】—— 否则一次偶然的读取失败
+            // 会让 _logPath 永远为 null，界面就永远停在"未连接"，且再也无法自愈。
+            if (game != null && (_logPath == null || _gameStartUtc == DateTime.MinValue))
+                ReadTargetInfo(game);
+
+            game?.Dispose();
 
             if (pid == 0) { Status.Connection = ConnectionState.NoGame; return; }
 
@@ -154,10 +202,13 @@ namespace OriTrainerDE
             // 管道确实不存在。只有"这个进程还没注入过"才动手（原因见文件头）。
             if (_injectedPid == pid) { Status.Connection = ConnectionState.Waiting; return; }
 
+            // 运行时就绪之前绝不注入 —— 否则会把游戏打崩（原因见文件头）。
+            // 没就绪就停在"未连接"，下一轮再看，界面也如实显示成没连上。
+            if (!RuntimeReady()) { Status.Connection = ConnectionState.Waiting; return; }
+
             Status.Connection = ConnectionState.Injecting;
 
-            // 注入失败不放弃：修改器和游戏同时启动时 mono.dll 可能还没加载完，
-            // 注入必然失败，下一轮再试就好。
+            // 注入失败不放弃：注入本身也可能因为别的原因失败，下一轮再试就好。
             if (!Inject(pid)) { Status.Connection = ConnectionState.Waiting; return; }
 
             _injectedPid = pid;
@@ -166,19 +217,87 @@ namespace OriTrainerDE
                 : ConnectionState.Waiting;
         }
 
-        private static int FindGame()
+        // 目标进程的托管运行时是否已装载完毕。判据见文件头。
+        //
+        // 只读文件、不碰目标进程：任何"在目标里跑代码探一下"的做法都是崩溃来源。
+        // 读不到就一律当成"没就绪"，继续等 —— 保守方向是安全的。
+        private static bool RuntimeReady()
         {
-            Process[] games = Process.GetProcessesByName(ProcessName);
+            // 两个依据缺一不可。少了启动时刻就没法区分"这次的日志"和"上次的残留"，
+            // 那时只能退化成"只看内容"，而那个判据是错的（会在 0ms 就放行）。
+            // 宁可停在"未连接"也不退回错误判据：前者只是连不上，后者会把游戏打崩。
+            if (_logPath == null || _gameStartUtc == DateTime.MinValue) return false;
 
             try
             {
-                return games.Length > 0 ? games[0].Id : 0;
+                // 条件 1：这份日志得是本次运行写的。
+                // 游戏启动约 50ms 时才清空日志，在那之前文件里是上一次运行的内容、
+                // 同样含就绪标记 —— 只看内容会在 0ms 就误判就绪，比不检查还糟。
+                // （取写入时间不需要打开文件，不受下面说的占用问题影响。）
+                if (File.GetLastWriteTimeUtc(_logPath) <= _gameStartUtc) return false;
+
+                // 条件 2：运行时确实装载完了。
+                // 读日志内容。
+                //
+                // ⚠ 必须显式用 FileShare.ReadWrite，不能用 File.ReadAllText。
+                //
+                // File.ReadAllText 内部是 FileShare.Read，而共享检查是【双向】的：
+                // 新打开者声明的 share 必须同时涵盖"对方已有的访问权"。游戏在整个运行期间
+                // 都持有一个【写】句柄（日志是持续追加的），于是
+                //     FileShare.Read 涵盖 FileAccess.Write ? 否
+                // 打开必然抛 IOException，被上面的 catch 吞掉 → 判据永远为假 →
+                // 界面永远停在"未连接"，先开哪个都一样。这个坑很隐蔽：
+                // 只要游戏没在跑（文件没人占用）就一切正常，一跑起来就必然失败。
+                //
+                // 另外加 FileShare.Delete，避免别的进程（含游戏自己轮转日志）被我们挡住。
+                using (FileStream fs = new FileStream(_logPath, FileMode.Open,
+                       FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (StreamReader r = new StreamReader(fs))
+                {
+                    return r.ReadToEnd().Contains(ReadyMarker);
+                }
             }
-            finally
+            catch
             {
-                // 每个 Process 都持有句柄，5Hz 巡检下不释放就是稳定泄漏。
-                foreach (Process p in games) p.Dispose();
+                return false; // 文件还不存在 / 路径不对：都继续等
             }
+        }
+
+        // 读取就绪判断所需的两项：进程真正的启动时刻、以及由它推出的日志路径。
+        //
+        // StartTime 必须是【进程真正的启动时刻】，不能拿"本程序第一次看到它"顶替：
+        // 正常用法是游戏早就绪、之后才开修改器，那样日志的写入时间必然早于
+        // "第一次看到"，判据会永远不成立、永远连不上。
+        //
+        // 两项都读失败时保持"没就绪"，即不注入。这是安全的僵局而非缺陷：
+        // 读 StartTime 只要 PROCESS_QUERY_INFORMATION，注入要 PROCESS_ALL_ACCESS，
+        // 前者是后者的子集 —— 连启动时刻都读不到时，注入本来也必然失败。
+        private static void ReadTargetInfo(Process game)
+        {
+            if (_gameStartUtc == DateTime.MinValue)
+            {
+                try { _gameStartUtc = game.StartTime.ToUniversalTime(); } catch { }
+            }
+
+            if (_logPath == null)
+            {
+                try
+                {
+                    string exe = game.MainModule.FileName;
+                    if (!string.IsNullOrEmpty(exe))
+                        _logPath = Path.Combine(Path.GetDirectoryName(exe), LogRelativePath);
+                }
+                catch { }
+            }
+        }
+
+        private static Process FindGame()
+        {
+            Process[] games = Process.GetProcessesByName(ProcessName);
+
+            for (int i = 1; i < games.Length; i++) games[i].Dispose(); // 只留第一个，其余立刻释放
+
+            return games.Length > 0 ? games[0] : null;
         }
 
         // 一次连接尝试的结果。只有 Missing 允许触发注入，
