@@ -36,12 +36,28 @@ namespace OriTrainerDEDLL
         {
             while (true)
             {
-                Native.ConnectNamedPipe(_pipe, IntPtr.Zero);
-                Shutdown(); // 刚连上：清掉上一次会话可能遗留的状态
-                ReadCommands();
-                // exe 断开后复用同一句柄等待下一次连接，不关闭重建。
-                Native.DisconnectNamedPipe(_pipe);
-                Shutdown(); // 刚断开：等价于"修改器已关闭"，停掉一切持续写入
+                // 这个线程一旦退出，管道句柄还在、进程也还在，但再也没人
+                // ConnectNamedPipe —— exe 侧此后永远连不上，也永远不会重连
+                // （进程扫描发现不了），唯一出路是重启游戏。所以必须兜住。
+                //
+                // 不需要重建管道：现实里唯一会抛的是 Shutdown() 里的
+                // Assembly.GetTypes()，此时管道好得很。就算异常发生在连接之后，
+                // 下一轮 ConnectNamedPipe 会立刻返回 ERROR_PIPE_CONNECTED
+                // （客户端还连着），流程自然接回 ReadCommands。
+                try
+                {
+                    Native.ConnectNamedPipe(_pipe, IntPtr.Zero);
+                    Shutdown(); // 刚连上：清掉上一次会话可能遗留的状态
+                    ReadCommands();
+                    // exe 断开后复用同一句柄等待下一次连接，不关闭重建。
+                    Native.DisconnectNamedPipe(_pipe);
+                    Shutdown(); // 刚断开：等价于"修改器已关闭"，停掉一切持续写入
+                }
+                catch (Exception ex)
+                {
+                    Log("Serve", ex);
+                    Thread.Sleep(100); // 防呆：万一走到了这里，不至于空转烧 CPU
+                }
             }
         }
 
@@ -72,7 +88,7 @@ namespace OriTrainerDEDLL
                 }
                 catch (Exception ex)
                 {
-                    Log(type, stop, ex);
+                    Log(type.Name + ".Stop", ex);
                 }
             }
         }
@@ -117,12 +133,12 @@ namespace OriTrainerDEDLL
             }
             catch (Exception ex)
             {
-                Log(type, method, ex);
+                Log(type.Name + "." + method.Name, ex);
             }
         }
 
-        // 记一次功能执行失败。写日志本身也不能抛：调用方在后台线程上，再抛出去整个游戏就没了。
-        private static void Log(Type type, MethodInfo method, Exception ex)
+        // 记一次执行失败。写日志本身也不能抛：调用方在后台线程上，再抛出去整个游戏就没了。
+        private static void Log(string subject, Exception ex)
         {
             // 反射调用会把功能里抛的异常包一层，真实原因在 InnerException
             if (ex is TargetInvocationException && ex.InnerException != null)
@@ -131,8 +147,8 @@ namespace OriTrainerDEDLL
             try
             {
                 File.AppendAllText(Path.Combine(Path.GetTempPath(), "OriTrainerDEDLL_error.log"),
-                    string.Format("[{0:yyyy-MM-dd HH:mm:ss.fff}] {1}.{2}() 执行失败：{3}: {4}{5}{6}{7}{8}",
-                        DateTime.Now, type.Name, method.Name, ex.GetType().FullName, ex.Message,
+                    string.Format("[{0:yyyy-MM-dd HH:mm:ss.fff}] {1}() 执行失败：{2}: {3}{4}{5}{6}{7}",
+                        DateTime.Now, subject, ex.GetType().FullName, ex.Message,
                         Environment.NewLine, ex.StackTrace, Environment.NewLine, Environment.NewLine));
             }
             catch { }
