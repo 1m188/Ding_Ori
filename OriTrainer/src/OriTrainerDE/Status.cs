@@ -1,7 +1,7 @@
 /*
-    全局状态：功能表（每个功能的名称、热键、开关）与程序状态（游戏 pid、注入进度）。
+    一些全局状态：功能表（每个功能的名称、热键、命令、开关）与程序状态（游戏 pid、注入进度）等。
 
-    全部可变状态只有这一处。
+    ⚠ 这里**只有状态**，没有任何业务逻辑行为。
 
     为什么功能表是数组 + 线性查找，而不是"按键 → 功能"的字典：
       1. 界面要按顺序列出全部功能，HOME 全开/全关也要遍历全部功能 —— 有序集合
@@ -13,10 +13,6 @@
          "两份表必须一致"这个静默失效点（漏登记一项 = 热键没反应，不报错）。
       所以热键作为功能自己的属性存在 Feature 上，查找就是扫描比对。
 */
-
-using System.IO.Pipes;
-using System.Text;
-using OriTrainerShared;
 
 namespace OriTrainerDE
 {
@@ -56,24 +52,7 @@ namespace OriTrainerDE
         public string StartCommand { get { return Name + " Start"; } }
         public string StopCommand { get { return Name + " Stop"; } }
 
-        // 小键盘 1..9 的 VK 是 0x61..0x69（VK_NUMPAD0 是 0x60）。
-        // 放在这里是为了让"编号 → 虚拟键"的换算和热键定义待在一起。
-        public int VirtualKey { get { return 0x60 + Digit; } }
-
         public string HotkeyLabel { get { return (NeedCtrl ? "Ctrl + 小键盘 " : "小键盘 ") + Digit; } }
-
-        // 反转发一条命令。On 只在写成功后翻转，写失败时保持原状，
-        // 免得界面显示的开关状态和实际发出的命令不一致。
-        public void Toggle(NamedPipeClientStream pipe)
-        {
-            byte[] command = Encoding.UTF8.GetBytes(
-                (On ? StopCommand : StartCommand) + Constants.Terminator);
-
-            pipe.Write(command, 0, command.Length);
-            pipe.Flush();
-
-            On = !On;
-        }
     }
 
     internal static class Status
