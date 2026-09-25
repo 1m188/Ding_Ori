@@ -22,24 +22,6 @@
     一次短促的敲击完全可能落在两轮之间、被整个漏掉。后台线程 10ms 采一次，
     漏采窗口缩小 8 倍；事件进队列后，即使主循环正在注入 + 连管道（最长数秒）
     也不会丢按键。
-
-    典型用法（主循环）：
-        Keyboard.Start();
-        try
-        {
-            while (...)
-            {
-                KeyEvent e;
-                while (Keyboard.TryRead(out e))
-                {
-                    foreach (Feature f in Features.All)
-                        if (f.VirtualKey == e.VirtualKey && f.NeedCtrl == e.Ctrl)
-                            f.Toggle(pipe);
-                }
-                ...
-            }
-        }
-        finally { Keyboard.Stop(); }
 */
 
 using System;
