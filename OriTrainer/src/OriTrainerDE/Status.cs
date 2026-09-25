@@ -16,12 +16,13 @@
 
 namespace OriTrainerDE
 {
-    // 载荷注入进度。
-    internal enum InjectionState
+    // 与游戏内载荷的连接状态。由 PipeClient 的后台线程写，界面读来显示。
+    internal enum ConnectionState
     {
-        None,    // 找到了游戏，但载荷还没注入（首次发命令时会自动注入）
-        Running, // 正在注入
-        Done,    // 已注入，命令管道已连通
+        NoGame,    // 没有游戏进程（还没启动 / 已退出）
+        Waiting,   // 有游戏进程，但管道还没连上（正在重试，或已被别的实例占用）
+        Injecting, // 正在注入载荷
+        Connected, // 管道已连通，命令可以发送
     }
 
     internal sealed class Feature
@@ -60,8 +61,8 @@ namespace OriTrainerDE
         // 游戏进程 ID；0 表示还没找到游戏进程。
         public static int Pid;
 
-        // 载荷注入进度。
-        public static InjectionState Injection;
+        // 与游戏内载荷的连接状态。⚠ 只有 PipeClient 的后台线程写这里。
+        public static ConnectionState Connection;
 
         // 顺序即界面顺序：先小键盘（普通功能），再 Ctrl+小键盘（特殊功能）。
         // 与 Go 版终极版的键位一致。
