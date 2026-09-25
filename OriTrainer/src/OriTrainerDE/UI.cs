@@ -30,7 +30,7 @@ namespace OriTrainerDE
         {
             StringBuilder b = new StringBuilder();
 
-            b.Append(Terminal.Title).Append("  奥日与迷失森林：终极版 · 修改器")
+            b.Append(Terminal.Title).Append("  奥日与迷失森林 · 终极版: 修改器")
              .Append(Terminal.Reset).Append('\n');
             Separator(b);
 
