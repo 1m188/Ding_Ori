@@ -1,23 +1,23 @@
-# lib —— 原版游戏程序集副本
+# lib-DE —— 终极版游戏程序集副本
 
-这里存放从**原版**游戏安装目录复制过来的托管程序集，供 `OriTrainerDLL` **编译期引用**。
+这里存放从**终极版**游戏安装目录复制过来的托管程序集，供 `OriTrainerDLL` **编译期引用**。
 
 ## 由来
 
 | 项 | 值 |
 |---|---|
-| 游戏 | Ori and the Blind Forest（奥日与迷失森林：原版） |
-| Steam App ID | `261570` |
-| Unity 版本 | `5.0.0b5`（读自 `ori.exe` 的 PE 版本资源 / 日志 `Initialize engine version`） |
-| 来源目录 | `<原版游戏安装目录>\ori_Data\Managed\` |
+| 游戏 | Ori and the Blind Forest: Definitive Edition（奥日与迷失森林：终极版） |
+| Steam App ID | `387290` |
+| Unity 版本 | `5.3.2f1`（读自 `oriDE.exe` 的 PE 版本资源） |
+| 来源目录 | `<终极版游戏安装目录>\oriDE_Data\Managed\` |
 
 文件校验值（SHA256，可用来确认与游戏本体是否一致）：
 
 | 文件 | SHA256 |
 |---|---|
-| `Assembly-CSharp.dll` | `E6155FD8E6EFCF8EEEC79AA3817D25C4EE4315546E216C0BD332F341D04C9A58` |
-| `UnityEngine.dll` | `8A8265062591A18F6133F89F95E100B028B3BD66368702D1245DEC80DDF52DBD` |
-| `Assembly-CSharp-firstpass.dll` | `C018AAFB06E8DB673104BE7FECEAF04AFF93672E823527E9E09AC88D66FC834E` |
+| `Assembly-CSharp.dll` | `6F3A0384059D38DA3183AD7D849C6BD352EA5555F3C4D019D6CA46453D9E8EAA` |
+| `UnityEngine.dll` | `F98945F391961D1D86D7E891834137E584DB7678270F68365195A9D48AEC4B47` |
+| `Assembly-CSharp-firstpass.dll` | `E817AD34C43B16695D7877C78CD01C54EBAB1735B632BA5B886648EF1DF06DB5` |
 
 
 ## 各自的作用
@@ -45,21 +45,6 @@ Unity 引擎的运行库。修改器里凡是碰到 `GameObject`、`Transform`�
 目前功能实现尚未用到，**为减少后续返工先一并复制**。若确定用不到可以删除，
 同时移除 csproj 里对应的 `<Reference>` 项。
 
-## 与原版/终极版的 Unity 版本差异
-
-原版是 Unity `5.0.0b5`，终极版是 Unity `5.3.2f1`。两者都是 Unity 5.x + Mono 2.x，
-托管层同为 .NET 2.0/3.5 API 子集，但**游戏内部类型与成员签名有差异**（版本不同），
-所以两版必须各自引用自己的程序集，不能混用：
-
-- 原版的 `Assembly-CSharp.dll` 引用 `mscorlib 2.0.5.0`（Unity 5.0 的 BCL 变体），
-  终极版引用 `mscorlib 2.0.0.0`（标准 .NET 2.0/3.5）。
-- 两版的 `UnityEngine.dll` 都引用 `mscorlib 2.0.0.0`，但文件本身版本不同、大小不同。
-
-注入载荷用标准 `net35` 编译（mscorlib 2.0.0.0），在原版游戏进程内运行时
-由 Unity 的 Mono 统一解析到进程内的 mscorlib —— 原版游戏自己就同时加载着
-引用 2.0.0.0（`UnityEngine.dll` 等）与 2.0.5.0（`Assembly-CSharp.dll` 等）的程序集，
-两套版本共存是游戏本身验证过的正常状态。
-
 ## 为什么是复制而不是引用原目录
 
 - 游戏已停止更新，程序集版本固定，复制一份不会失效。
@@ -74,7 +59,7 @@ Unity 引擎的运行库。修改器里凡是碰到 `GameObject`、`Transform`�
 
 ```xml
 <Reference Include="UnityEngine">
-  <HintPath>..\..\lib\UnityEngine.dll</HintPath>
+  <HintPath>..\..\lib-DE\UnityEngine.dll</HintPath>
   <Private>false</Private>
 </Reference>
 ```

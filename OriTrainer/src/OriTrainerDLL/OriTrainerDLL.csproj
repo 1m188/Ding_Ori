@@ -22,7 +22,7 @@
   </ItemGroup>
 
   <!--
-    游戏程序集，从 lib\ 直接引用（游戏已停更，版本固定）。
+    游戏程序集，从 lib\ 或 lib-DE\ 直接引用。
 
     Private=false 是必须的：这些程序集在游戏进程里已经存在，运行时由游戏提供。
     若设为 true，编译会把它们复制到输出目录（约 3MB），既污染发布包，
@@ -30,15 +30,15 @@
   -->
   <ItemGroup>
     <Reference Include="UnityEngine">
-      <HintPath>..\..\lib\UnityEngine.dll</HintPath>
+      <HintPath>..\..\lib-DE\UnityEngine.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="Assembly-CSharp">
-      <HintPath>..\..\lib\Assembly-CSharp.dll</HintPath>
+      <HintPath>..\..\lib-DE\Assembly-CSharp.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="Assembly-CSharp-firstpass">
-      <HintPath>..\..\lib\Assembly-CSharp-firstpass.dll</HintPath>
+      <HintPath>..\..\lib-DE\Assembly-CSharp-firstpass.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>
