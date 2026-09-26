@@ -49,9 +49,9 @@ exe侧全程维护一条长连接：游戏退出、崩溃、重启后会自动�
 - [vendor](./vendor/) sharpmonoinjector项目中注入dll相关的API，修改器exe通过这些API将dll注入到游戏中去
 - [tests](./tests/) 测试套件（假游戏 + 测试项目），跑法见 [tests/README](./tests/README.md)
 - 构建脚本
-    - [build.ps1](./build.ps1) - 构建普通版游戏修改器
+    - [build.ps1](./build.ps1) - 构建原版游戏修改器
     - [build-DE.ps1](./build-DE.ps1) - 构建终极版游戏修改器
-    - [publish.ps1](./publish.ps1) - 发布普通版游戏修改器
+    - [publish.ps1](./publish.ps1) - 发布原版游戏修改器
     - [publish-DE.ps1](./publish-DE.ps1) - 发布终极版游戏修改器
 
 ## 注意
