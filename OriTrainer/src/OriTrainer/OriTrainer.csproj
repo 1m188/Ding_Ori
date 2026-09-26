@@ -5,11 +5,25 @@
     目标框架 net48，输出 exe。
   -->
   <PropertyGroup>
+    <!--
+      Edition：区分两版游戏（Vanilla=原版 / DE=终极版），与 Debug/Release 正交。
+      默认 Vanilla（原版）；构建终极版时传 -p:Edition=DE。
+      这是全局属性：命令行传了就保持，不传才在这里补默认值。
+    -->
+    <Edition Condition="'$(Edition)'==''">Vanilla</Edition>
+
     <TargetFramework>net48</TargetFramework>
     <OutputType>Exe</OutputType>
-    <AssemblyName>OriTrainer</AssemblyName>
-    <RootNamespace>OriTrainer</RootNamespace>
     <RuntimeIdentifier>win-x86</RuntimeIdentifier>
+
+    <!--
+      exe 名按 Edition 区分，两版产物可共存、互不覆盖：
+        原版   OriTrainer.exe
+        终极版 OriTrainerDE.exe
+    -->
+    <AssemblyName Condition="'$(Edition)'=='DE'">OriTrainerDE</AssemblyName>
+    <AssemblyName Condition="'$(Edition)'!='DE'">OriTrainer</AssemblyName>
+    <RootNamespace>OriTrainer</RootNamespace>
   </PropertyGroup>
 
   <!--

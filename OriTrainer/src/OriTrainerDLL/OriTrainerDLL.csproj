@@ -5,11 +5,25 @@
     目标框架 net35（游戏内置 Mono 2.x，只认 .NET 3.5 程序集），输出 dll。
   -->
   <PropertyGroup>
+    <!--
+      Edition：区分两版游戏（Vanilla=原版 / DE=终极版），与 Debug/Release 正交。
+      默认 Vanilla（原版）；构建终极版时传 -p:Edition=DE。
+      与 exe 项目同一套 Edition：命令行传 -p:Edition=DE 时作为全局属性
+    -->
+    <Edition Condition="'$(Edition)'==''">Vanilla</Edition>
+
     <TargetFramework>net35</TargetFramework>
     <OutputType>Library</OutputType>
-    <AssemblyName>OriTrainerDLL</AssemblyName>
-    <RootNamespace>OriTrainerDLL</RootNamespace>
     <RuntimeIdentifier>win-x86</RuntimeIdentifier>
+
+    <!--
+      DLL 产物名按 Edition 区分：
+        原版   OriTrainerDLL.dll
+        终极版 OriTrainerDEDLL.dll
+    -->
+    <AssemblyName Condition="'$(Edition)'=='DE'">OriTrainerDEDLL</AssemblyName>
+    <AssemblyName Condition="'$(Edition)'!='DE'">OriTrainerDLL</AssemblyName>
+    <RootNamespace>OriTrainerDLL</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>
@@ -22,13 +36,17 @@
   </ItemGroup>
 
   <!--
-    游戏程序集，从 lib\ 或 lib-DE\ 直接引用。
+    游戏程序集按 Edition 引用：
+      原版    lib\    （Ori，Unity 5.0.0b5）
+      终极版  lib-DE\ （Ori DE，Unity 5.3.2f1）
+    两个目录里的程序集是不同版本的游戏，类型与成员签名有差异，绝不可混用，
+    所以这里用两个互斥的 ItemGroup，任意一次构建只进其中一个。
 
     Private=false 是必须的：这些程序集在游戏进程里已经存在，运行时由游戏提供。
     若设为 true，编译会把它们复制到输出目录（约 3MB），既污染发布包，
     也可能让游戏加载到错误版本。
   -->
-  <ItemGroup>
+  <ItemGroup Condition="'$(Edition)'=='DE'">
     <Reference Include="UnityEngine">
       <HintPath>..\..\lib-DE\UnityEngine.dll</HintPath>
       <Private>false</Private>
@@ -39,6 +57,21 @@
     </Reference>
     <Reference Include="Assembly-CSharp-firstpass">
       <HintPath>..\..\lib-DE\Assembly-CSharp-firstpass.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(Edition)'!='DE'">
+    <Reference Include="UnityEngine">
+      <HintPath>..\..\lib\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>..\..\lib\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp-firstpass">
+      <HintPath>..\..\lib\Assembly-CSharp-firstpass.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>
