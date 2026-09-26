@@ -88,6 +88,13 @@ namespace OriTrainer
             "OriTrainerDLL";
 #endif
 
+        // 载荷里 Loader 类所在的命名空间。两版统一为 OriTrainerDLL（DLL 代码的
+        // namespace 不随装配名变，见 OriTrainerDLL.csproj 注释）。
+        // ⚠ 这不是 PayloadName：装配名只用于资源名与 mono_assembly_load 的装载，
+        //   mono_class_from_name 要的是类型所在的命名空间 —— 若错传装配名，
+        //   找不到类、注入必失败（状态在 Injecting/Waiting 间来回跳）。
+        private const string LoaderNamespace = "OriTrainerDLL";
+
         private const int TickMs = 200;     // 状态巡检间隔
         private const int ConnectMs = 1000; // 探到空闲实例后的连接超时
 
@@ -383,8 +390,9 @@ namespace OriTrainer
             {
                 using (Injector injector = new Injector(pid))
                 {
-                    // 载荷由 csproj 内嵌进本 exe，资源名见 OriTrainer.csproj 的 LogicalName
-                    injector.Inject(ReadPayload(PayloadName + ".dll"), PayloadName, "Loader", "Load");
+                    // 载荷由 csproj 内嵌进本 exe，资源名见 OriTrainer.csproj 的 LogicalName。
+                    // 第 2 参数是 Loader 的命名空间（LoaderNamespace），不是装配名（PayloadName）。
+                    injector.Inject(ReadPayload(PayloadName + ".dll"), LoaderNamespace, "Loader", "Load");
                 }
                 return true;
             }
