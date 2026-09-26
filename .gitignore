@@ -17,9 +17,6 @@ out/
 *.log
 *.tmp
 Thumbs.db
-## Go
-*.exe
-*.exe~
 
 # 奥日与迷失森林终极版风灵月影修改器
 !/Ori and the Blind Forest Definitive Edition v1.0 Plus 13 Trainer.exe
