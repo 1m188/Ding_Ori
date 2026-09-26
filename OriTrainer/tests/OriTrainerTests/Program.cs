@@ -9,7 +9,7 @@
 //   OriTrainerTests e2e        只跑端到端（需要真实 exe 已构建）
 //   OriTrainerTests list       列出套件
 //
-// 退出码：0=全过，1=有失败。便于脚本/CI 直接判。
+// 退出码：0=全过，1=有失败，2=套件名不认识。便于脚本/CI 直接判。
 
 using System;
 using System.Collections.Generic;
@@ -36,6 +36,15 @@ namespace OriTrainerTests
             {
                 foreach (Suite s in All) Console.WriteLine("  " + s.Name.PadRight(12) + s.Description);
                 return 0;
+            }
+
+            // 不认识的套件名直接报错：否则"跑了个不存在的套件"会显示 PASS=0 FAIL=0
+            // 并返回 0，看起来像全绿，实际什么都没测。退出码用 2，和"有失败"的 1 区分开。
+            if (pick != null && All.Find(s => s.Name == pick) == null)
+            {
+                Console.Error.WriteLine("未知套件: " + pick);
+                Console.Error.WriteLine("可用套件: " + string.Join(" ", All.ConvertAll(s => s.Name).ToArray()));
+                return 2;
             }
 
             Console.WriteLine("OriTrainer 测试" + (pick == null ? "（全量）" : "：" + pick));

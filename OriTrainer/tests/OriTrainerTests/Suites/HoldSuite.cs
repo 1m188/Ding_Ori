@@ -33,13 +33,20 @@ namespace OriTrainerTests
             m.Invoke(null, null);
         }
 
+        private const int SeenCap = 1000000;
+
         private static volatile bool _samplerRunning;
         private static volatile int _seenInjecting;
 
+        // ⚠ 采样线程【只读 Status.Connection】，不调 Ready()。
+        //   见 GateSuite 里的同一处说明：Ready() 读的字段是 Tick() 写的，
+        //   让两个线程分别调它们就是测试自己制造数据竞争。
+        //   计数封顶的原因也同 GateSuite：这个循环没有 sleep，不封顶可能自增回绕。
         private static void SampleLoop()
         {
             while (_samplerRunning)
-                if (Status.Connection == ConnectionState.Injecting) _seenInjecting++;
+                if (Status.Connection == ConnectionState.Injecting && _seenInjecting < SeenCap)
+                    _seenInjecting++;
         }
 
         public static void Run()
@@ -54,6 +61,11 @@ namespace OriTrainerTests
             Thread.Sleep(300);
             if (File.Exists(cmdLog)) File.Delete(cmdLog);
 
+            // 本套件全程由本线程调用 Tick()，不起巡检线程（理由同 GateSuite）：
+            // 两个线程并发跑 Tick() 会使状态迁移不可预期。
+            PipeClient.Stop();
+            Thread.Sleep(300); // 给可能残留的巡检线程时间退出循环
+
             // 假游戏：清空日志 → 写标记 → 一直持有写句柄 → 不建管道（逼出注入分支）
             Process fake = Test.StartLoggedFake(cmdLog, gameLog, 50, 300, true, true);
             Console.WriteLine("  假游戏 pid=" + fake.Id + "（持有日志写句柄 + 不建管道）");
@@ -61,7 +73,6 @@ namespace OriTrainerTests
             Thread.Sleep(300);
 
             // _logPath 由 Tick() 在发现进程时填充，所以必须先巡检一次再问 Ready()
-            PipeClient.Start();
             Tick();
 
             // 把门依赖的每个输入都摊开打出来 —— 失败时能直接看出是哪一环

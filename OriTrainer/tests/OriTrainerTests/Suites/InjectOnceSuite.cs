@@ -47,16 +47,22 @@ namespace OriTrainerTests
                 Test.WaitFor(() => Status.Connection == ConnectionState.Waiting, 3000),
                 "actual=" + Status.Connection);
 
+            // 观察期内持续采样。两条都必须在循环里累计，不能等循环结束后再看一眼 ——
+            // 只看最后一刻的话，中途若短暂跳到 Injecting 又退回 Waiting 就漏掉了，
+            // 而"中途曾经注入过"恰恰是本套件要抓的失败。
             bool everInjecting = false;
+            bool everConnected = false;
             Stopwatch sw = Stopwatch.StartNew();
             while (sw.ElapsedMilliseconds < 3000)
             {
                 if (Status.Connection == ConnectionState.Injecting) everInjecting = true;
+                if (Status.Connection == ConnectionState.Connected) everConnected = true;
                 Thread.Sleep(10);
             }
-            Test.Check("观察期内从未进入 Injecting", !everInjecting, "saw Injecting");
-            Test.Check("观察期内始终不是 Connected", Status.Connection != ConnectionState.Connected,
-                "actual=" + Status.Connection);
+            Test.Check("观察期内从未进入 Injecting", !everInjecting,
+                "管道被占着却仍然走进了注入分支");
+            Test.Check("观察期内始终不是 Connected", !everConnected,
+                "抢占了唯一实例却还是连上了（说明连的不是被占的那个实例）");
 
             // 释放占用：PipeClient 应立刻接上，且全程没有注入发生
             squatter.Dispose();

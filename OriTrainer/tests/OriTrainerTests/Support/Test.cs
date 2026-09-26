@@ -92,13 +92,6 @@ namespace OriTrainerTests
             Console.WriteLine("== " + title + " ==");
         }
 
-        public static int Report()
-        {
-            Console.WriteLine();
-            Console.WriteLine("PASS=" + _pass + "  FAIL=" + _fail);
-            return _fail == 0 ? 0 : 1;
-        }
-
         // ---- 等待 ----
         public static bool WaitFor(Func<bool> cond, int ms)
         {
@@ -174,11 +167,6 @@ namespace OriTrainerTests
                 catch { Thread.Sleep(20); }
             }
             return "";
-        }
-
-        public static void Ensure(Predicate<string> condition, string path, int ms)
-        {
-            WaitFor(() => condition(ReadAll(path)), ms);
         }
     }
 }

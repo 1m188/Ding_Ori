@@ -78,16 +78,45 @@ namespace OriTrainerTests
 
         // 通过子进程截图：本进程不碰自己的控制台。
         // 子进程把结果以 UTF-8 写文件，这里按 UTF-8 读回（走 stdout 会被代码页毁掉中文）。
+        //
+        // ⚠ 必须先删掉同名旧文件再启动 Grab。_grabSeq 每个进程从 0 重新开始，所以
+        //   screen_0.txt 之类的名字【上一轮跑测试时就已经存在】；若这次 Grab 启动失败
+        //   或没来得及写，File.Exists 仍为真，于是会把上一轮的界面当成本轮的读进来，
+        //   断言就在对着陈旧的截图判定。删掉之后 File.Exists 只是"这次真的写出来了"。
         private static string[] Screen(int pid)
         {
             string tmp = Path.Combine(Test.Dir, "screen_" + (_grabSeq++) + ".txt");
+            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+
             ProcessStartInfo psi = new ProcessStartInfo(Test.GrabExe, pid + " 80 \"" + tmp + "\"");
             psi.UseShellExecute = false;
             psi.CreateNoWindow = true;
-            using (Process p = Process.Start(psi)) p.WaitForExit(5000);
 
+            bool exited;
+            using (Process p = Process.Start(psi)) exited = p.WaitForExit(5000);
+
+            // 超时说明 Grab 卡住了：把残留进程杀掉，别让它迟一步写出文件、留在输出目录里。
+            if (!exited)
+            {
+                Process[] grabbies = Process.GetProcessesByName("Grab");
+                foreach (Process g in grabbies)
+                {
+                    try { g.Kill(); g.WaitForExit(1000); } catch { }
+                    g.Dispose();
+                }
+                return new[] { "<grab timeout>" };
+            }
             if (!File.Exists(tmp)) return new[] { "<no output>" };
-            return File.ReadAllText(tmp, Encoding.UTF8).Replace("\r\n", "\n").Split('\n');
+
+            try
+            {
+                return File.ReadAllText(tmp, Encoding.UTF8).Replace("\r\n", "\n").Split('\n');
+            }
+            finally
+            {
+                // 别把截图留在输出目录里越堆越多（每轮跑 E2E 会调用几十次）。
+                try { File.Delete(tmp); } catch { }
+            }
         }
 
         private static int Count(string[] screen, string mark)

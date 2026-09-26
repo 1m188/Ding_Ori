@@ -26,7 +26,13 @@
     <RuntimeIdentifier>win-x86</RuntimeIdentifier>
     <LangVersion>7.3</LangVersion>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
-    <!-- 测试项目不发布，关掉文档警告噪音 -->
+    <!--
+      抑制 CS0649（字段从未被赋值，将一直保持默认值）。
+      这是把 Status.cs 编进来、却没编 Program.cs 的必然结果：Feature.On 只由主循环
+      的 Send() 赋值，那个文件不在这里（见上面 [Program.cs 为什么不在列表里]）。
+      被抑制的是"从未赋值"，不是文档注释警告（那是 CS1591，与本项目无关）。
+      测试项目改不动、也不需要改产品侧的 Status.cs，所以只能在这里抑制。
+    -->
     <NoWarn>$(NoWarn);CS0649</NoWarn>
   </PropertyGroup>
 
