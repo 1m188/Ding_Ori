@@ -379,10 +379,12 @@ namespace OriTrainerDE
         {
             // 获取要注入的载荷的数据
             using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream(logicalName))
+            using (MemoryStream ms = new MemoryStream())
             {
-                byte[] payload = new byte[s.Length];
-                s.Read(payload, 0, payload.Length);
-                return payload;
+                // 必须用 CopyTo 而不是单次 Read：Stream.Read 按契约只保证"至少读一个字节"，
+                // 不保证填满缓冲区。短读会让载荷被截断，症状是注入莫名其妙失败、万一出问题很难排查。
+                s.CopyTo(ms);
+                return ms.ToArray();
             }
         }
 
