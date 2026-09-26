@@ -50,6 +50,9 @@ jobs:
         working-directory: OriTrainer
         run: |
           ./publish.ps1
+          # pwsh 默认不因原生命令失败而中断步骤：publish 失败时 $LASTEXITCODE 非 0，
+          # 若继续复制会把上一版构建残留的旧 exe 顶替上传，所以失败必须显式抛错。
+          if ($LASTEXITCODE -ne 0) { throw "publish.ps1 构建失败（退出码 $LASTEXITCODE）" }
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\artifacts" | Out-Null
           Copy-Item "src\OriTrainer\bin\Release\net48\win-x86\publish\OriTrainer.exe" "$env:RUNNER_TEMP\artifacts\" -Force
 
@@ -58,6 +61,7 @@ jobs:
         working-directory: OriTrainer
         run: |
           ./publish-DE.ps1
+          if ($LASTEXITCODE -ne 0) { throw "publish-DE.ps1 构建失败（退出码 $LASTEXITCODE）" }
           Copy-Item "src\OriTrainer\bin\Release\net48\win-x86\publish\OriTrainerDE.exe" "$env:RUNNER_TEMP\artifacts\" -Force
 
       - name: 确认第三方修改器随仓库存在
