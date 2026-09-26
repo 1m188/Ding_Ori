@@ -19,13 +19,15 @@ namespace OriTrainerDEDLL.Features
     //
     // ---- 为什么不需要主线程钩子 ----
     // CurrentTime 是"值语义"的累加器，不是由其它状态派生的缓存，因此不存在被重算
-    // 覆盖的问题。全程序集里写它的地方只有三处：
+    // 覆盖的问题。全程序集里写它的地方只有三处（都在 GameTimer 内部）：
     //     GameTimer::Reset           stfld（就是本功能调的）
     //     GameTimer::FixedUpdate     CurrentTime += Time.deltaTime
     //     GameTimer::Serialize       ldflda（读档时从存档还原）
-    // 外部读取者也只有两处，且都不需要我们去驱动：
-    //     GameController::get_GameTimeInSeconds   Mathf.RoundToInt(Timer.CurrentTime)
-    //     TimeCounterDisplay::Update              GUIText.set_text(get_DisplayTimeAsString())
+    // 读取者有四类，且都不需要我们去驱动：
+    //     GameController::get_GameTimeInSeconds    Mathf.RoundToInt(Timer.CurrentTime)
+    //     TimeCounterDisplay::Update               GUIText（屏幕右上角计时）
+    //     InventoryManager                         暂停界面的 H:MM:SS
+    //     SaveSlotInfo::FillData                   Hours / Minutes / Seconds ← 写进存档槽
     // Reset() 自身只写一个 float 字段，没有任何 Unity native 调用，所以与
     // UnlimitedLife / ZeroDeaths 一样用定时器即可，不像 InfiniteDash /
     // InfiniteDoubleJump / ShowMap / UnlockAllAbilities 那样必须挂 OnGameFixedUpdate。
@@ -50,8 +52,12 @@ namespace OriTrainerDEDLL.Features
     //     不一致，此处只记录 IL 事实。）
     //   · LeaderboardsController.UploadScores 上传的 time 也取自
     //     get_GameTimeInSeconds，因此排行榜时间同样会变成 0。
-    //   两者与本功能的用途一致，故不额外处理；但需知悉这是"通关计时真的变 0"，
-    //   而不只是界面显示为 0。
+    //   · 存档槽上的游玩时间也会变 0：SaveGameController.PerformSave 会调
+    //     SaveSlotInfo.FillData()，而它从 GameController.Instance.Timer 取
+    //     Hours / Minutes / Seconds 写进槽位信息。开启期间只要存过一次档，
+    //     存档选择界面上该槽显示的时间就是 0，且随存档一起落盘。
+    //   三者与本功能的用途一致，故不额外处理；但需知悉这是"通关计时、排行榜时间、
+    //   存档槽显示真的都变 0"，而不只是屏幕上的那个计时器显示为 0。
     public static class ResetTime
     {
         private const int IntervalMs = 10;

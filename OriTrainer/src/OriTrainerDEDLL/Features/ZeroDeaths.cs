@@ -12,11 +12,19 @@ namespace OriTrainerDEDLL.Features
     // 但它的 setter 带了额外动作（IL）：
     //     if (Instance != null) {
     //         Instance.m_deathCounter = value;
-    //         SaveSceneManager.Master.Save(Checkpoint.SaveGameData.Master);   // ← 白送的
+    //         SaveSceneManager.Master.Save(SaveGameData.Master, Instance);   // ← 白送的
     //     }
-    // SaveSceneManager.Save(SaveScene) 会遍历存档里所有 ISerializable 逐个 Serialize()，
-    // 重建整个 SaveScene.SaveObjects 内存缓冲。本功能要持续写入（见下），若走属性就是
-    // 每 10ms 一次全量场景序列化，既拖垮游戏，也会在存档流程中间插入非预期的缓冲重算。
+    // 这里调的是 Save(SaveScene, ISerializable) 这个【双参重载】，别和同名的单参
+    // Save(SaveScene) 搞混 —— 两者代价差一个数量级：
+    //   · 单参版：清空 SaveObjects 后遍历全部 ISerializable 重建整个存档缓冲（全量）；
+    //   · 双参版（本条走的就是它）：SaveSerializeToId 线性查一次 id，然后只把传入的
+    //     这一个对象序列化进存档，几行而已。
+    // 所以「每 10ms 一次全量场景序列化」这个说法是错的，真实代价只是一次 id 线性查找
+    // 加写入一个 int。
+    //
+    // 即便如此仍然不走属性：本功能要持续写入（见下），而属性每次都会顺手改动存档
+    // 缓冲。一个"读一下、必要时清零"的功能不该有写存档这种副作用，尤其不该在游戏
+    // 自己的存档流程中途插进去。直写字段则完全没有这个动作。
     //
     // 因此改为反射直写私有字段 m_deathCounter（private、非 readonly、非 static，
     // 可写）。这在语义上等同于 golang 版的裸内存写入 nav+0x14 —— 那边之所以没有

@@ -54,10 +54,25 @@ net35 → netstandard2.0   error CS0012: 类型"Object"在未引用的程序集�
 
 ## 未做的修改
 
-上游还有两处已知瑕疵，本项目**暂未改动**，因为当前代码路径不触发：
+上游还有一些已知瑕疵，本项目**暂未改动**，因为当前代码路径不触发：
 
 - `Memory.Dispose()` 用 `MEM_DECOMMIT` 释放 `VirtualAllocEx` 分配的内存，
   正确应为 `MEM_RELEASE`（`0x8000`）。会导致内存泄漏，但不致崩溃。
+
+- `ProcessUtils.GetModuleInformation()` 的 `cbSize` 参数传错了（`ProcessUtils.cs`）：
+
+  ```csharp
+  Native.GetModuleInformation(handle, ptrs[i], out MODULEINFO info, (uint)(size * ptrs.Length))
+  ```
+
+  `cbSize` 按 MSDN 应为 `sizeof(MODULEINFO)`，x86 下是 **12**。这里传的是
+  `size * ptrs.Length`（4 × 模块数），x86 下恰好等于前面 `EnumProcessModulesEx`
+  算出的 `bytesNeeded`，所以**实测能跑通**（psapi 未严格校验该值），
+  纯属数值上的巧合，并非有意为之。
+
+  潜在影响：模块数极少时该值会小于 12，此时 psapi 可能拒绝写入或截断结构体；
+  但 `mono.dll` 所在进程必然已加载数十个模块，实际不会落到那个区间。
+
 - `Assembler.Push()` 的立即数编码有三个区间，中间那个是错的：
 
   | 参数值 | 操作码 | 指令需要 | 实际写入 | 结果 |

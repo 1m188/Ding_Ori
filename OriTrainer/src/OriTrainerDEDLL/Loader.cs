@@ -66,10 +66,7 @@ namespace OriTrainerDEDLL
         //
         // 命名空间即功能清单：不维护注册表，新增功能类自动被覆盖（约定见 Dispatch）。
         //
-        // 注意这只是"停止"，不是"撤销"：按各功能的设计，解锁技能 / 三把钥匙 / 难度 /
-        // 能力点数 / 100% 探索 / 重置时间都不还原，InfiniteDash、InfiniteDoubleJump、
-        // UnlockAllAbilities 也刻意不还原 HasAbility。真正会写回原值的只有 SuperJump
-        // 的 5 个跳跃高度和 SoulFlameAnywhere 的 HoldDownDuration。
+        // 注意这只是"停止"，不是"撤销"：按各功能的设计，一些在功能设计上不方便或者语义上不好撤销的东西不会撤销
         public static void Shutdown()
         {
             foreach (Type type in typeof(Loader).Assembly.GetTypes())

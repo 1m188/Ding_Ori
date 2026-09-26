@@ -19,13 +19,25 @@ namespace OriTrainerDEDLL.Features
     //
     // ---- 为什么持续写入，而不是写一次就完 ----
     // 唯一会把这些标志位"打回"的地方是 SceneMetaData+SeinInitialValues.ApplyInitialValues，
-    // 它按场景元数据无条件写回 38 项能力。好消息是它被一次性闸门挡着
-    // （SeinPlaceholder.AfterLoadingFromMasterFinishedAfterInstantiation 里
-    //   RequireInitialValues != 0 && !IsLoadingGame 才调 SetupGameplay），
-    // 所以换场景、死亡恢复检查点都**不会**触发。
-    // 但 NewGameAction / LoadSceneAction / RestartGame / SkipCutsceneController.SkipPrologue
-    // 会重新置位该闸门，也就是"回标题再读档"这类操作仍会打回。
-    // 本功能持续压制，这些情况下会自动补回；另外每帧调用 EnsureRightPrefabs 对同值
+    // 它按场景元数据无条件写回 38 项能力。它只在 GameController.SetupGameplay 里被调用，
+    // 而后者被一道一次性闸门挡着（SeinPlaceholder.AfterLoadingFromMasterFinishedAfterInstantiation
+    //   里 RequireInitialValues 为真才调 SetupGameplay，且调用前先把它置回 false）。
+    // 于是问题归结为"谁会重新打开这道闸门"（全程序集共 10 处置位）：
+    //   · 换场景【不会】—— LoadSceneAction 只在 UseSceneInitialValues 为真时才置位；
+    //   · 普通死亡恢复检查点【不会】—— 那条路径完全不碰这道闸门。
+    // 但下列操作会：RestartGame / RestartOneLifeMode / NewGameAction /
+    // SkipCutsceneController.SkipPrologue / GoToSequenceMenuItem / WatchCutsceneAction /
+    // SetGameModeToPrologueAction / ResetStateForDebugMenuGoToScene，
+    // 也就是"回标题再读档""重开一局""跳过序章"这类操作仍会打回。
+    //
+    // ⚠ 有一个不显眼的例外，不能概括成"死亡恢复一定不会触发"：
+    //   SaveGameController.RestoreCheckpointPart1 在 SaveWasOneLifeAndKilled 为真时
+    //   也会置位这道闸门，此时死亡恢复检查点同样会打回。该条件读的是
+    //   SaveSlotInfo.Difficulty（不是 DifficultyController.Difficulty，前者只在存档时
+    //   由 FillData 拷入），所以同时开着 OneLifeProtect 并把难度存成 Easy 之后，
+    //   这个例外就不会成立。
+    //
+    // 本功能持续压制，以上情况都会自动补回；另外每帧调用 EnsureRightPrefabs 对同值
     // 会提前 return（set_IsInstantiated 有同值守卫），开销可忽略。
     //
     // ---- 为什么不用游戏自己的 PlayerAbilities.SetAbility ----
