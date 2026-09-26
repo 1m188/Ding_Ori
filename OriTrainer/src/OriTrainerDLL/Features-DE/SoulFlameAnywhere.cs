@@ -2,7 +2,7 @@ using System;
 using System.Reflection;
 using System.Threading;
 
-namespace OriTrainerDLL.Features
+namespace OriTrainerDLL.FeaturesDE
 {
     // 可在不安全区域 / 不平稳地面建立灵魂链接。
     //

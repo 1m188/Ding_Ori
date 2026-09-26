@@ -1,7 +1,7 @@
 using System;
 using System.Reflection;
 
-namespace OriTrainerDLL.Features
+namespace OriTrainerDLL.FeaturesDE
 {
     // 无限冲刺（完全版：基础冲刺 + 空中冲刺 + 无次数/冷却限制）。
     //

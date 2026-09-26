@@ -1,6 +1,6 @@
 using System;
 
-namespace OriTrainerDLL.Features
+namespace OriTrainerDLL.FeaturesDE
 {
     // 解锁全部基础技能：把暂停界面里显示的 11 项基础能力全部授予。
     //

@@ -1,6 +1,6 @@
 using System;
 
-namespace OriTrainerDLL.Features
+namespace OriTrainerDLL.FeaturesDE
 {
     // 无限能力点数：一次性把能力点写满，不做持续写入。
     //

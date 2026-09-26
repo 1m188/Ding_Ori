@@ -1,7 +1,7 @@
 using System;
 using System.Threading;
 
-namespace OriTrainerDLL.Features
+namespace OriTrainerDLL.FeaturesDE
 {
     // 一命保护（死亡不清档）：把 DifficultyController.Difficulty 保持为 Easy，
     // 让"一命死亡即清档"那条链整条不成立，死亡退化为普通模式的检查点复活。

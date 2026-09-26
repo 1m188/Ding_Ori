@@ -11,7 +11,7 @@ namespace OriTrainerDLL
 {
     public static class Loader
     {
-        private const string FeatureNamespace = "OriTrainerDLL.Features";
+        private const string FeatureNamespace = "OriTrainerDLL.FeaturesDE";
 
         private static IntPtr _pipe; // 管道句柄
 

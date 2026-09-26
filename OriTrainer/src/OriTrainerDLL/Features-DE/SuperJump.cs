@@ -1,6 +1,6 @@
 using System.Threading;
 
-namespace OriTrainerDLL.Features
+namespace OriTrainerDLL.FeaturesDE
 {
     // 超级跳：持续把 5 个跳跃高度字段放大到原值的 Multiplier 倍。
     //
