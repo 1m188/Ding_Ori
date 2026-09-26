@@ -25,7 +25,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Threading;
-using OriTrainerDE;
+using OriTrainer;
 
 namespace OriTrainerTests
 {

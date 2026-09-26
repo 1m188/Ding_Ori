@@ -4,14 +4,14 @@
     测试项目：把产品源码【编进来】而不是引用 exe。
 
     [为什么不用 ProjectReference]
-    PipeClient / Status / Keyboard / UI 全是 internal，引用 OriTrainerDE.exe
+    PipeClient / Status / Keyboard / UI 全是 internal，引用 OriTrainer.exe
     拿不到它们（除非给产品加 InternalsVisibleTo，那是为测试改动产品代码）。
     把源码文件直接 Compile 进来，internal 在同一程序集内天然可见，
     产品侧零改动 —— 这是本项目测到真实代码的前提。
 
     [Program.cs 为什么不在列表里]
     它有自己的 Main，会和本项目的 Main 冲突。这是可接受的：
-    与本项目无关的 E2E 本来就应该跑【真实构建出来的 OriTrainerDE.exe】，
+    与本项目无关的 E2E 本来就应该跑【真实构建出来的 OriTrainer.exe】，
     而不是把主循环编进来假装是它（见 Suites/E2ESuite.cs）。
 
     [注意 XML 语法]
@@ -49,9 +49,9 @@
 
   <!-- 产品源码（编进来，不是引用）-->
   <ItemGroup>
-    <Compile Include="..\..\src\OriTrainerDE\PipeClient.cs" />
-    <Compile Include="..\..\src\OriTrainerDE\Status.cs" />
-    <Compile Include="..\..\src\OriTrainerDE\Keyboard.cs" />
+    <Compile Include="..\..\src\OriTrainer\PipeClient.cs" />
+    <Compile Include="..\..\src\OriTrainer\Status.cs" />
+    <Compile Include="..\..\src\OriTrainer\Keyboard.cs" />
     <Compile Include="..\..\src\shared\Constants.cs" />
     <Compile Include="..\..\vendor\SharpMonoInjector\**\*.cs" LinkBase="Vendor" />
   </ItemGroup>
@@ -76,7 +76,7 @@
     E2E 直接启动它的输出文件。
   -->
   <ItemGroup>
-    <ProjectReference Include="..\..\src\OriTrainerDE\OriTrainerDE.csproj">
+    <ProjectReference Include="..\..\src\OriTrainer\OriTrainer.csproj">
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
       <OutputItemType>TestedExe</OutputItemType>
     </ProjectReference>

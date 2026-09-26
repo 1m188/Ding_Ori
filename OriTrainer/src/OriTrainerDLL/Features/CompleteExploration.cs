@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using System.Threading;
 
-namespace OriTrainerDEDLL.Features
+namespace OriTrainerDLL.Features
 {
     // 100% 探索：把所有区域的完成度缓存直接写成 1.0（即界面 100%）。
     //

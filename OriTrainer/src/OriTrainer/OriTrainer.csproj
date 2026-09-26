@@ -7,8 +7,8 @@
   <PropertyGroup>
     <TargetFramework>net48</TargetFramework>
     <OutputType>Exe</OutputType>
-    <AssemblyName>OriTrainerDE</AssemblyName>
-    <RootNamespace>OriTrainerDE</RootNamespace>
+    <AssemblyName>OriTrainer</AssemblyName>
+    <RootNamespace>OriTrainer</RootNamespace>
     <RuntimeIdentifier>win-x86</RuntimeIdentifier>
   </PropertyGroup>
 
@@ -40,13 +40,13 @@
   </ItemGroup>
 
   <!--
-    注入载荷（OriTrainerDEDLL，net35），构建顺序由这条引用保证。
+    注入载荷（OriTrainerDLL，net35），构建顺序由这条引用保证。
     两个开关缺一不可：
       ReferenceOutputAssembly=false  —— 不把 DLL 当程序集引用（net35 的类型本 exe 用不到）
       OutputItemType=InjectedPayload  —— 把 DLL 的输出路径装进同名 item，供下面的 Target 取用
   -->
   <ItemGroup>
-    <ProjectReference Include="..\OriTrainerDEDLL\OriTrainerDEDLL.csproj">
+    <ProjectReference Include="..\OriTrainerDLL\OriTrainerDLL.csproj">
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
       <OutputItemType>InjectedPayload</OutputItemType>
     </ProjectReference>
@@ -66,7 +66,7 @@
       挂在更晚的 CreateManifestResourceNames / PrepareResources 都会赶不上
       （资源名与编译输入此时已经算完），挂在这里才能被正常处理。
 
-    LogicalName 固定资源名，运行时用 GetManifestResourceStream("OriTrainerDEDLL.dll") 取，
+    LogicalName 固定资源名，运行时用 GetManifestResourceStream("OriTrainerDLL.dll") 取，
     不依赖 RootNamespace 与文件路径，改名/挪目录都不会悄悄变。
   -->
   <Target Name="EmbedInjectionPayload"
@@ -75,14 +75,14 @@
 
     <ItemGroup>
       <EmbeddedResource Include="@(InjectedPayload)">
-        <LogicalName>OriTrainerDEDLL.dll</LogicalName>
+        <LogicalName>OriTrainerDLL.dll</LogicalName>
         <Type>Non-Resx</Type>
       </EmbeddedResource>
     </ItemGroup>
 
     <!-- 载荷没拿到就是确定性错误，不能静默产出"少了一半"的 exe -->
     <Error Condition="'@(InjectedPayload)' == '' and '$(DesignTimeBuild)' != 'true'"
-           Text="未能取得注入载荷路径：ProjectReference 到 OriTrainerDEDLL 没有产出。请检查 src\OriTrainerDEDLL\OriTrainerDEDLL.csproj 是否可编译。" />
+           Text="未能取得注入载荷路径：ProjectReference 到 OriTrainerDLL 没有产出。请检查 src\OriTrainerDLL\OriTrainerDLL.csproj 是否可编译。" />
   </Target>
 
 </Project>

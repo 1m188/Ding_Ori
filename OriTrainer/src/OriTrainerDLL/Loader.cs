@@ -7,11 +7,11 @@ using System.Text;
 using System.Threading;
 using OriTrainerShared;
 
-namespace OriTrainerDEDLL
+namespace OriTrainerDLL
 {
     public static class Loader
     {
-        private const string FeatureNamespace = "OriTrainerDEDLL.Features";
+        private const string FeatureNamespace = "OriTrainerDLL.Features";
 
         private static IntPtr _pipe; // 管道句柄
 
@@ -143,7 +143,7 @@ namespace OriTrainerDEDLL
 
             try
             {
-                File.AppendAllText(Path.Combine(Path.GetTempPath(), "OriTrainerDEDLL_error.log"),
+                File.AppendAllText(Path.Combine(Path.GetTempPath(), "OriTrainerDLL_error.log"),
                     string.Format("[{0:yyyy-MM-dd HH:mm:ss.fff}] {1}() 执行失败：{2}: {3}{4}{5}{6}{7}",
                         DateTime.Now, subject, ex.GetType().FullName, ex.Message,
                         Environment.NewLine, ex.StackTrace, Environment.NewLine, Environment.NewLine));

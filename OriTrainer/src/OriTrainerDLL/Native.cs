@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
 
-namespace OriTrainerDEDLL
+namespace OriTrainerDLL
 {
     // 管道必须用 Win32 API：Mono 2.x 的托管 NamedPipeServerStream 会把客户端发来的
     // 字节原样回显给客户端（实测），无法用来收命令。

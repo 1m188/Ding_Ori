@@ -18,7 +18,7 @@ using System;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace OriTrainerDE
+namespace OriTrainer
 {
     internal static class Terminal
     {

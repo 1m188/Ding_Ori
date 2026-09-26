@@ -29,12 +29,12 @@ bin\Release\net48\win-x86\OriTrainerTests.exe list     # 列出全部套件
 ### 为什么测试项目把产品源码「编进来」而不是引用 exe
 
 `PipeClient` / `Status` / `Keyboard` / `UI` 全是 `internal`，
-`ProjectReference` 到 `OriTrainerDE.exe` 拿不到它们（除非给产品加
+`ProjectReference` 到 `OriTrainer.exe` 拿不到它们（除非给产品加
 `InternalsVisibleTo`，那是为测试改动产品代码）。
 把源码文件直接 `Compile` 进来，`internal` 在同一程序集内天然可见，**产品侧零改动**。
 
 代价是 `Program.cs` 不能一起编（它有自己的 `Main`）。这不是问题：
-E2E 本来就该跑**真实构建出来的 `OriTrainerDE.exe`**，而不是把主循环编进来假装是它。
+E2E 本来就该跑**真实构建出来的 `OriTrainer.exe`**，而不是把主循环编进来假装是它。
 
 ### 假游戏为什么要单独一个 exe、还必须叫 oriDE.exe
 
@@ -94,5 +94,5 @@ E2E 本来就该跑**真实构建出来的 `OriTrainerDE.exe`**，而不是把�
 - 假游戏不加载 `mono.dll`，所以**注入必然失败**。这正好用来验证"注入失败不放弃、
   下一轮继续"，但也意味着真实的注入成功路径只能靠 `e2e` + 手动在真游戏上验证。
 - `e2e` 会用 `SendInput` 发全局热键，运行期间不要操作键盘。
-- E2E/Soak 跑的是 `src\OriTrainerDE\bin\Release\net48\win-x86\OriTrainerDE.exe`，
+- E2E/Soak 跑的是 `src\OriTrainer\bin\Release\net48\win-x86\OriTrainer.exe`，
   所以改动产品代码后要先 `dotnet build`，否则测的还是旧产物。

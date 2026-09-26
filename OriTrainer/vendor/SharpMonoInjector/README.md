@@ -1,6 +1,6 @@
 # vendor/SharpMonoInjector
 
-第三方源码，**只取注入部分**，以「源码链接」方式编入 `src\OriTrainerDE`（exe）。
+第三方源码，**只取注入部分**，以「源码链接」方式编入 `src\OriTrainer`（exe）。
 
 - 上游：https://github.com/warbler/SharpMonoInjector
 - 提交：`73566c1be1e8e1bb25ab60683557958368b2cd47`（2019-03-23）
@@ -14,7 +14,7 @@
 
 ## 只编入 exe，绝不编入 DLL
 
-载荷（`OriTrainerDEDLL`，net35）**不能**引用这里的代码：
+载荷（`OriTrainerDLL`，net35）**不能**引用这里的代码：
 
 ```
 net48 → netstandard2.0   编译通过

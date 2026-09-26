@@ -1,6 +1,6 @@
 using System;
 
-namespace OriTrainerDEDLL.Features
+namespace OriTrainerDLL.Features
 {
     // 显示地图：打开游戏自带的"未探索地图可见"调试位，整张地图（地形 + 图标 + 迷雾）
     // 一并按"已发现"绘制，观感等同于插满了所有地图石。

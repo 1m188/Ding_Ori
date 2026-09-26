@@ -1,6 +1,6 @@
 # lib —— 游戏程序集副本
 
-这里存放从游戏安装目录复制过来的托管程序集，供 `OriTrainerDEDLL` **编译期引用**。
+这里存放从游戏安装目录复制过来的托管程序集，供 `OriTrainerDLL` **编译期引用**。
 
 ## 由来
 
@@ -55,7 +55,7 @@ Unity 引擎的运行库。修改器里凡是碰到 `GameObject`、`Transform`�
 
 ## 引用方式
 
-`src\OriTrainerDEDLL\OriTrainerDEDLL.csproj` 中通过 `HintPath` 引用：
+`src\OriTrainerDLL\OriTrainerDLL.csproj` 中通过 `HintPath` 引用：
 
 ```xml
 <Reference Include="UnityEngine">
@@ -79,8 +79,8 @@ Unity 引擎的运行库。修改器里凡是碰到 `GameObject`、`Transform`�
 
 ## 重要：只在 DLL 项目里引用，exe 项目不要引用
 
-- `OriTrainerDEDLL`（net35，注入载荷）→ **需要**这些引用，它要直接操作游戏类型。
-- `OriTrainerDE`（net48，控制台修改器）→ **不需要**。它运行在游戏进程之外，
+- `OriTrainerDLL`（net35，注入载荷）→ **需要**这些引用，它要直接操作游戏类型。
+- `OriTrainer`（net48，控制台修改器）→ **不需要**。它运行在游戏进程之外，
   只负责注入和通过命名管道发命令，不接触任何游戏类型。
 
 ## 关于版权
@@ -90,7 +90,7 @@ Unity 引擎的运行库。修改器里凡是碰到 `GameObject`、`Transform`�
 
 ## 载荷不会因此变大
 
-引用游戏程序集**不会**把游戏代码编进 `OriTrainerDEDLL.dll`。
+引用游戏程序集**不会**把游戏代码编进 `OriTrainerDLL.dll`。
 载荷比游戏程序集本身小两个数量级。
 
 原因是编译产物里只记录「类型名 + 成员签名」的引用条目（TypeRef / MemberRef），

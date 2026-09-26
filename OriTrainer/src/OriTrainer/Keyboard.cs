@@ -29,7 +29,7 @@ using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Threading;
 
-namespace OriTrainerDE
+namespace OriTrainer
 {
     // 一次按下：虚拟键码 + 按下瞬间的 Ctrl 状态。
     internal struct KeyEvent

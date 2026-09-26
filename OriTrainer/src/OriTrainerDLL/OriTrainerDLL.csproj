@@ -7,8 +7,8 @@
   <PropertyGroup>
     <TargetFramework>net35</TargetFramework>
     <OutputType>Library</OutputType>
-    <AssemblyName>OriTrainerDEDLL</AssemblyName>
-    <RootNamespace>OriTrainerDEDLL</RootNamespace>
+    <AssemblyName>OriTrainerDLL</AssemblyName>
+    <RootNamespace>OriTrainerDLL</RootNamespace>
     <RuntimeIdentifier>win-x86</RuntimeIdentifier>
   </PropertyGroup>
 

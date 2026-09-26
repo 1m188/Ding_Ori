@@ -58,7 +58,7 @@ namespace OriTrainerTests
             get
             {
                 return Path.GetFullPath(Path.Combine(RepoRoot,
-                    @"src\OriTrainerDE\bin\Release\net48\win-x86\OriTrainerDE.exe"));
+                    @"src\OriTrainer\bin\Release\net48\win-x86\OriTrainer.exe"));
             }
         }
 

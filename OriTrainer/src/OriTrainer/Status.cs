@@ -14,7 +14,7 @@
       所以热键作为功能自己的属性存在 Feature 上，查找就是扫描比对。
 */
 
-namespace OriTrainerDE
+namespace OriTrainer
 {
     // 与游戏内载荷的连接状态。由 PipeClient 的后台线程写，界面读来显示。
     internal enum ConnectionState
@@ -27,7 +27,7 @@ namespace OriTrainerDE
 
     internal sealed class Feature
     {
-        // 命令名。必须与 DLL 侧 OriTrainerDEDLL.Features 下的类名逐字一致 ——
+        // 命令名。必须与 DLL 侧 OriTrainerDLL.Features 下的类名逐字一致 ——
         // Loader.Dispatch 是按这个名字反射找类型的，写错了不会报错，只会静默无响应。
         public readonly string Name;
 

@@ -68,12 +68,12 @@ using System.Threading;
 using OriTrainerShared;
 using SharpMonoInjector;
 
-namespace OriTrainerDE
+namespace OriTrainer
 {
     internal static class PipeClient
     {
         private const string ProcessName = "oriDE";          // 游戏进程名（不带 .exe）
-        private const string PayloadName = "OriTrainerDEDLL"; // 注入载荷名，同时也是内嵌资源名
+        private const string PayloadName = "OriTrainerDLL"; // 注入载荷名，同时也是内嵌资源名
         private const int TickMs = 200;     // 状态巡检间隔
         private const int ConnectMs = 1000; // 探到空闲实例后的连接超时
 
@@ -364,7 +364,7 @@ namespace OriTrainerDE
             {
                 using (Injector injector = new Injector(pid))
                 {
-                    // 载荷由 csproj 内嵌进本 exe，资源名见 OriTrainerDE.csproj 的 LogicalName
+                    // 载荷由 csproj 内嵌进本 exe，资源名见 OriTrainer.csproj 的 LogicalName
                     injector.Inject(ReadPayload(PayloadName + ".dll"), PayloadName, "Loader", "Load");
                 }
                 return true;

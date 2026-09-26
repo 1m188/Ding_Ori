@@ -12,7 +12,7 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
 using System.Threading;
-using OriTrainerDE;
+using OriTrainer;
 
 namespace OriTrainerTests
 {

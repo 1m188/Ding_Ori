@@ -2,7 +2,7 @@ using System;
 using System.Reflection;
 using System.Threading;
 
-namespace OriTrainerDEDLL.Features
+namespace OriTrainerDLL.Features
 {
     // 死亡数归零：持续把 SeinDeathCounter.m_deathCounter 保持为 0。
     //

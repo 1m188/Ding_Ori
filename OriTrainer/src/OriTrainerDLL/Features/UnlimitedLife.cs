@@ -1,13 +1,16 @@
 using System.Threading;
 
-namespace OriTrainerDEDLL.Features
+namespace OriTrainerDLL.Features
 {
-    // 无限能量：每 10ms 把当前能量写为上限。
-    public static class UnlimitedEnergy
+    // 无限生命：每 10ms 把当前生命写为上限。
+    //
+    // 用定时器而不是循环：Start() 跑在命令线程上，必须立刻返回，
+    // 否则 Stop 命令永远送不进来（见 Loader.Dispatch 的说明）。
+    public static class UnlimitedLife
     {
-        private const int IntervalMs = 10; // 能量写满间隔时间
+        private const int IntervalMs = 10; // 生命值写满间隔时间
 
-        private static Timer _timer;
+        private static Timer _timer = null; // 生命值写满定时器
 
         public static void Start()
         {
@@ -29,8 +32,8 @@ namespace OriTrainerDEDLL.Features
             // 定时器回调里的未捕获异常会终止整个进程（即游戏），必须自己兜住
             try
             {
-                SeinEnergy energy = Game.Characters.Sein.Energy;
-                energy.Current = energy.Max;
+                SeinHealthController health = Game.Characters.Sein.Mortality.Health;
+                health.Amount = health.MaxHealth;
             }
             catch { }
         }

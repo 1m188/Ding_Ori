@@ -21,7 +21,7 @@
 using System;
 using System.Threading;
 
-namespace OriTrainerDE
+namespace OriTrainer
 {
     internal static class Program
     {

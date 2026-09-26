@@ -108,7 +108,7 @@ namespace SharpMonoInjector
                 //
                 // When a constructor throws, the caller never receives the object, so
                 // Dispose() is never called and _handle is never closed. That was harmless
-                // upstream (inject once, or give up), but OriTrainerDE retries injection
+                // upstream (inject once, or give up), but OriTrainer retries injection
                 // every 200ms until the game has finished loading mono.dll — a task that
                 // measurably took a game that was still starting up from ~0 leaked handles
                 // to 1 per attempt, without bound.

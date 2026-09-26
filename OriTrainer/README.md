@@ -22,8 +22,8 @@ exe侧全程维护一条长连接：游戏退出、崩溃、重启后会自动�
 
 ## 目录结构
 - [src](./src/) 源码目录
-    - [OriTrainerDE](./src/OriTrainerDE/) 奥日与迷失森林终极版修改器
-    - [OriTrainerDEDLL](./src/OriTrainerDEDLL/) 奥日与迷失森林终极版修改器将要向游戏中注入的DLL
+    - [OriTrainer](./src/OriTrainer/) 奥日与迷失森林终极版修改器
+    - [OriTrainerDLL](./src/OriTrainerDLL/) 奥日与迷失森林终极版修改器将要向游戏中注入的DLL
 - [lib](./lib/) 游戏程序集，用于给要注入的dll引用API，从而在注入后能够操作游戏内容
 - [vendor](./vendor/) sharpmonoinjector项目中注入dll相关的API，修改器exe通过这些API将dll注入到游戏中去
 - [tests](./tests/) 测试套件（假游戏 + 测试项目），跑法见 [tests/README](./tests/README.md)
@@ -31,4 +31,4 @@ exe侧全程维护一条长连接：游戏退出、崩溃、重启后会自动�
 ## 注意
 - 所有项目的构建平台目标都必须是x86，因为游戏是x86的
 - 修改器需要管理员权限（注入要 `PROCESS_ALL_ACCESS`），已通过 `app.manifest` 声明
-- `OriTrainerDE` / `OriTrainerDEDLL` 两个项目的 x86 是靠 `RuntimeIdentifier=win-x86` 得到的（它们没设 `PlatformTarget`），不要删掉这一项
+- `OriTrainer` / `OriTrainerDLL` 两个项目的 x86 是靠 `RuntimeIdentifier=win-x86` 得到的（它们没设 `PlatformTarget`），不要删掉这一项

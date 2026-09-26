@@ -1,4 +1,4 @@
-// 端到端：跑【真实构建出来的 OriTrainerDE.exe】，用 SendInput 模拟热键，
+// 端到端：跑【真实构建出来的 OriTrainer.exe】，用 SendInput 模拟热键，
 // 借 Grab.exe 子进程截图核对界面与开关复位。
 //
 // 为什么不用编进来的主循环：
