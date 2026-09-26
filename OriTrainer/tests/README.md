@@ -4,10 +4,11 @@
 
 ```powershell
 cd OriTrainer
-dotnet build OriTrainer.sln -c Release
+dotnet build OriTrainer.sln -c Release            # 原版
+dotnet build OriTrainer.sln -c Release -p:Edition=DE   # 终极版
 
 cd tests\OriTrainerTests
-bin\Release\net48\win-x86\OriTrainerTests.exe          # 全量
+bin\Release\net48\win-x86\OriTrainerTests.exe          # 全量（测刚构建的那个 Edition）
 bin\Release\net48\win-x86\OriTrainerTests.exe conn     # 只跑一套
 bin\Release\net48\win-x86\OriTrainerTests.exe list     # 列出全部套件
 ```
@@ -15,7 +16,7 @@ bin\Release\net48\win-x86\OriTrainerTests.exe list     # 列出全部套件
 退出码：`0` = 全过，`1` = 有失败，`2` = 套件名不认识（防止打错名字时假装全绿）。
 当前全量共 **64 项断言**。
 
-跑之前请先关掉真游戏：套件按进程名 `oriDE` 扫描（与修改器一致的判定方式），
+跑之前请先关掉真游戏：套件按进程名扫描（DE 版 `oriDE`、原版 `ori`，与修改器一致的判定方式），
 残留的真游戏进程会被当成被测对端，断言会乱。
 
 ## 三个项目
@@ -23,7 +24,7 @@ bin\Release\net48\win-x86\OriTrainerTests.exe list     # 列出全部套件
 | 项目 | 作用 |
 |---|---|
 | `OriTrainerTests` | 测试主体，按参数分派套件 |
-| `FakeGame` | 假游戏，**产物名固定为 `oriDE.exe`** |
+| `FakeGame` | 假游戏，产物名按 Edition 变（DE 版 `oriDE.exe`、原版 `ori.exe`） |
 | `Grab` | 截图工具，读目标控制台的内容并以 UTF-8 落盘 |
 
 ### 为什么测试项目把产品源码「编进来」而不是引用 exe
@@ -34,17 +35,18 @@ bin\Release\net48\win-x86\OriTrainerTests.exe list     # 列出全部套件
 把源码文件直接 `Compile` 进来，`internal` 在同一程序集内天然可见，**产品侧零改动**。
 
 代价是 `Program.cs` 不能一起编（它有自己的 `Main`）。这不是问题：
-E2E 本来就该跑**真实构建出来的 `OriTrainer.exe`**，而不是把主循环编进来假装是它。
+E2E 本来就该跑**真实构建出来的 `OriTrainer.exe` / `OriTrainerDE.exe`**（按 Edition），
+而不是把主循环编进来假装是它。
 
-### 假游戏为什么要单独一个 exe、还必须叫 oriDE.exe
+### 假游戏为什么要单独一个 exe、还必须叫 oriDE.exe / ori.exe
 
-`PipeClient` 是按进程名 `oriDE` 找游戏的，并且由**进程主模块所在目录**推算日志路径。
+`PipeClient` 是按进程名找游戏的（DE 版 `oriDE`、原版 `ori`），并且由**进程主模块所在目录**推算日志路径。
 所以构建后会把假游戏复制到两个位置：
 
 | 位置 | 用途 |
 |---|---|
-| `<测试输出>\oriDE.exe` | 仅管道模式（测连接与命令流） |
-| `<测试输出>\FakeGame\oriDE.exe` | 日志模式，日志落在同级 `FakeGame\OriDE_Data\output_log.txt`（测就绪门） |
+| `<测试输出>\oriDE.exe`（DE）/ `ori.exe`（原版） | 仅管道模式（测连接与命令流） |
+| `<测试输出>\FakeGame\oriDE.exe`（DE）/ `ori.exe`（原版） | 日志模式，日志落在同级 `FakeGame\OriDE_Data\output_log.txt`（DE）/ `ori_Data\output_log.txt`（原版）（测就绪门） |
 
 ## 套件
 
@@ -94,5 +96,6 @@ E2E 本来就该跑**真实构建出来的 `OriTrainer.exe`**，而不是把主�
 - 假游戏不加载 `mono.dll`，所以**注入必然失败**。这正好用来验证"注入失败不放弃、
   下一轮继续"，但也意味着真实的注入成功路径只能靠 `e2e` + 手动在真游戏上验证。
 - `e2e` 会用 `SendInput` 发全局热键，运行期间不要操作键盘。
-- E2E/Soak 跑的是 `src\OriTrainer\bin\Release\net48\win-x86\OriTrainer.exe`，
+- E2E/Soak 跑的是 `src\OriTrainer\bin\Release\net48\win-x86\OriTrainer.exe`（原版）
+  或 `OriTrainerDE.exe`（DE，构建时传 `-p:Edition=DE`），
   所以改动产品代码后要先 `dotnet build`，否则测的还是旧产物。

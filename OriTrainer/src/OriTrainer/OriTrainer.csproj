@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    终极版修改器主程序（控制台），运行在游戏进程之外。
+    修改器主程序（控制台），运行在游戏进程之外。
     目标框架 net48，输出 exe。
   -->
   <PropertyGroup>
@@ -17,7 +17,7 @@
     <RuntimeIdentifier>win-x86</RuntimeIdentifier>
 
     <!--
-      exe 名按 Edition 区分，两版产物可共存、互不覆盖：
+      exe 名按 Edition 区分：
         原版   OriTrainer.exe
         终极版 OriTrainerDE.exe
     -->

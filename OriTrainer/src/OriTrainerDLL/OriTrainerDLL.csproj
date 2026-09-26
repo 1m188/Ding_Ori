@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    终极版修改器注入用的 DLL，加载进游戏进程内。
+    修改器注入用的 DLL，加载进游戏进程内。
     目标框架 net35（游戏内置 Mono 2.x，只认 .NET 3.5 程序集），输出 dll。
   -->
   <PropertyGroup>
