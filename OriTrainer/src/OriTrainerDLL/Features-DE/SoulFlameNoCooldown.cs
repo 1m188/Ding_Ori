@@ -1,6 +1,6 @@
 using System.Threading;
 
-namespace OriTrainerDLL.FeaturesDE
+namespace OriTrainerDLL.Features
 {
     // 灵魂链接无需冷却：每 10ms 调用游戏自己的 FillSoulFlameBar() 把冷却清零。
     //

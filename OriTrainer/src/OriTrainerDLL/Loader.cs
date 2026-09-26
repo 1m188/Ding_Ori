@@ -11,7 +11,10 @@ namespace OriTrainerDLL
 {
     public static class Loader
     {
-        private const string FeatureNamespace = "OriTrainerDLL.FeaturesDE";
+        // 功能类命名空间：两版统一为 OriTrainerDLL.Features。
+        // 版本区分在 csproj 按 Edition 选择编译 Features 或 Features-DE 目录，
+        // 实际构建只编进一个目录，命名空间无需区分。
+        private const string FeatureNamespace = "OriTrainerDLL.Features";
 
         private static IntPtr _pipe; // 管道句柄
 

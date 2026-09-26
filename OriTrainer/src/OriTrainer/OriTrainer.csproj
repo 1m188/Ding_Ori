@@ -24,6 +24,9 @@
     <AssemblyName Condition="'$(Edition)'=='DE'">OriTrainerDE</AssemblyName>
     <AssemblyName Condition="'$(Edition)'!='DE'">OriTrainer</AssemblyName>
     <RootNamespace>OriTrainer</RootNamespace>
+
+    <!-- 条件编译开关：DE 版定义 DE，原版不定义。代码里用 #if DE 切两版差异。 -->
+    <DefineConstants Condition="'$(Edition)'=='DE'">$(DefineConstants);DE</DefineConstants>
   </PropertyGroup>
 
   <!--
@@ -80,7 +83,8 @@
       挂在更晚的 CreateManifestResourceNames / PrepareResources 都会赶不上
       （资源名与编译输入此时已经算完），挂在这里才能被正常处理。
 
-    LogicalName 固定资源名，运行时用 GetManifestResourceStream("OriTrainerDLL.dll") 取，
+    LogicalName 固定资源名，运行时用 GetManifestResourceStream 取（PipeClient.PayloadName + ".dll"），
+    必须与 DLL 产物名一致（按 Edition 变）：DE 版 OriTrainerDEDLL.dll，原版 OriTrainerDLL.dll。
     不依赖 RootNamespace 与文件路径，改名/挪目录都不会悄悄变。
   -->
   <Target Name="EmbedInjectionPayload"
@@ -89,7 +93,8 @@
 
     <ItemGroup>
       <EmbeddedResource Include="@(InjectedPayload)">
-        <LogicalName>OriTrainerDLL.dll</LogicalName>
+        <LogicalName Condition="'$(Edition)'=='DE'">OriTrainerDEDLL.dll</LogicalName>
+        <LogicalName Condition="'$(Edition)'!='DE'">OriTrainerDLL.dll</LogicalName>
         <Type>Non-Resx</Type>
       </EmbeddedResource>
     </ItemGroup>

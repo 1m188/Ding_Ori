@@ -1,7 +1,7 @@
 using System;
 using System.Threading;
 
-namespace OriTrainerDLL.FeaturesDE
+namespace OriTrainerDLL.Features
 {
     // 获得三把钥匙：把 Keys.GinsoTree / ForlornRuins / MountHoru 三个静态标记保持为 true。
     //

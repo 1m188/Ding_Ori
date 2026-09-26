@@ -24,6 +24,9 @@
     <AssemblyName Condition="'$(Edition)'=='DE'">OriTrainerDEDLL</AssemblyName>
     <AssemblyName Condition="'$(Edition)'!='DE'">OriTrainerDLL</AssemblyName>
     <RootNamespace>OriTrainerDLL</RootNamespace>
+
+    <!-- 条件编译开关：DE 版定义 DE，原版不定义。代码里用 #if DE 切两版差异。 -->
+    <DefineConstants Condition="'$(Edition)'=='DE'">$(DefineConstants);DE</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
@@ -33,6 +36,18 @@
   <!-- 两端共享的源码（协议常量等），不是共享程序集：net35 与 net48 无法共用同一份二进制 -->
   <ItemGroup>
     <Compile Include="..\shared\**\*.cs" LinkBase="Shared" />
+  </ItemGroup>
+
+  <!--
+    功能代码按 Edition 只编一份：SDK 默认自动包含所有 .cs，
+    不加下面两条就会把 Features-DE 和 Features 两个目录都编进来，
+    而它们各自依赖不同版本的游戏程序集，混编必然编译失败。
+      DE      编 Features-DE\
+      原版    编 Features\
+  -->
+  <ItemGroup>
+    <Compile Remove="Features-DE\**\*.cs" Condition="'$(Edition)'!='DE'" />
+    <Compile Remove="Features\**\*.cs" Condition="'$(Edition)'=='DE'" />
   </ItemGroup>
 
   <!--

@@ -1,7 +1,7 @@
 using System;
 using System.Reflection;
 
-namespace OriTrainerDLL.FeaturesDE
+namespace OriTrainerDLL.Features
 {
     // 无限二段跳。
     //

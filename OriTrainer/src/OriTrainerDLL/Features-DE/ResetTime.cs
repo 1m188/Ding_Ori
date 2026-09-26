@@ -1,7 +1,7 @@
 using System;
 using System.Threading;
 
-namespace OriTrainerDLL.FeaturesDE
+namespace OriTrainerDLL.Features
 {
     // 重置时间：把游玩计时器归零，暂停界面显示 0:00:00。
     //

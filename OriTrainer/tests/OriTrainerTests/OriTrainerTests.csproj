@@ -34,6 +34,12 @@
       测试项目改不动、也不需要改产品侧的 Status.cs，所以只能在这里抑制。
     -->
     <NoWarn>$(NoWarn);CS0649</NoWarn>
+    <!--
+      测试套件按终极版设计（假游戏叫 oriDE.exe、E2E 跑真实 DE 版 exe），
+      所以编译进来的产品源码要定义 DE 常量，让 #if DE 走终极版分支。
+      若将来要为原版加测试，再按 Edition 区分。
+    -->
+    <DefineConstants>$(DefineConstants);DE</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>

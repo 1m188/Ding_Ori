@@ -72,8 +72,22 @@ namespace OriTrainer
 {
     internal static class PipeClient
     {
-        private const string ProcessName = "oriDE";          // 游戏进程名（不带 .exe）
-        private const string PayloadName = "OriTrainerDLL"; // 注入载荷名，同时也是内嵌资源名
+        // 游戏进程名（不带 .exe）：终极版 oriDE，原版 ori。
+        private const string ProcessName =
+#if DE
+            "oriDE";
+#else
+            "ori";
+#endif
+
+        // 注入载荷名，同时也是内嵌资源名。必须与 DLL 产物名一致（见 csproj LogicalName）。
+        private const string PayloadName =
+#if DE
+            "OriTrainerDEDLL";
+#else
+            "OriTrainerDLL";
+#endif
+
         private const int TickMs = 200;     // 状态巡检间隔
         private const int ConnectMs = 1000; // 探到空闲实例后的连接超时
 
@@ -86,9 +100,14 @@ namespace OriTrainer
         // 详见文件头"注入前必须先等托管运行时就绪"。
         private const string ReadyMarker = "Completed reload";
 
-        // 日志相对游戏 exe 的位置。exe 在 <游戏目录>\oriDE.exe，
-        // 日志在 <游戏目录>\OriDE_Data\output_log.txt。
-        private const string LogRelativePath = "OriDE_Data\\output_log.txt";
+        // 日志相对游戏 exe 的位置。exe 在 <游戏目录>\oriDE.exe（或 ori.exe），
+        // 日志在 <游戏目录>\OriDE_Data\output_log.txt（终极版）或 ori_Data\output_log.txt（原版）。
+        private const string LogRelativePath =
+#if DE
+            "OriDE_Data\\output_log.txt";
+#else
+            "ori_Data\\output_log.txt";
+#endif
 
         private static readonly object _gate = new object();
 

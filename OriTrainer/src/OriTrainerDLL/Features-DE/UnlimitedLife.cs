@@ -1,6 +1,6 @@
 using System.Threading;
 
-namespace OriTrainerDLL.FeaturesDE
+namespace OriTrainerDLL.Features
 {
     // 无限生命：每 10ms 把当前生命写为上限。
     //

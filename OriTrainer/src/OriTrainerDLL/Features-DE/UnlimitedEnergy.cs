@@ -1,6 +1,6 @@
 using System.Threading;
 
-namespace OriTrainerDLL.FeaturesDE
+namespace OriTrainerDLL.Features
 {
     // 无限能量：每 10ms 把当前能量写为上限。
     public static class UnlimitedEnergy
