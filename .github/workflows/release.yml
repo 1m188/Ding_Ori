@@ -67,8 +67,10 @@ jobs:
       - name: 确认第三方修改器随仓库存在
         shell: pwsh
         run: |
-          if (-not (Test-Path "$TRAINER")) {
-            throw "仓库中未找到 $TRAINER（它应被 .gitignore 白名单保留并已提交）"
+          # 步骤级 env 是进程环境变量，PowerShell 里要读 $env:TRAINER（$TRAINER 是
+          # 不存在的 PS 变量，会展开成空串，Test-Path "" 恒为 false）。
+          if (-not (Test-Path "$env:TRAINER")) {
+            throw "仓库中未找到 $env:TRAINER（它应被 .gitignore 白名单保留并已提交）"
           }
 
       - name: 打印校验和（便于在 Release 说明里附上）
@@ -77,7 +79,7 @@ jobs:
           Get-FileHash -Algorithm SHA256 `
             "$env:RUNNER_TEMP\artifacts\OriTrainer.exe", `
             "$env:RUNNER_TEMP\artifacts\OriTrainerDE.exe", `
-            "$TRAINER" `
+            "$env:TRAINER" `
             | Format-Table Path, Hash -AutoSize
 
       - name: 上传到 Release
@@ -90,7 +92,7 @@ jobs:
           gh release upload $tag @(
             "$env:RUNNER_TEMP\artifacts\OriTrainer.exe",
             "$env:RUNNER_TEMP\artifacts\OriTrainerDE.exe",
-            "$TRAINER"
+            "$env:TRAINER"
           ) --clobber
           Write-Host "--- 当前资产 ---"
           gh release view "$tag" --json assets --jq '.assets[].name'
