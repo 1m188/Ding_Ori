@@ -1,4 +1,4 @@
-// 端到端：跑【真实构建出来的 OriTrainer.exe】，用 SendInput 模拟热键，
+// 端到端：跑【真实构建出来的修改器 exe】，用 SendInput 模拟热键，
 // 借 Grab.exe 子进程截图核对界面与开关复位。
 //
 // 为什么不用编进来的主循环：
@@ -6,7 +6,12 @@
 //   这里要验证的正是"真实 exe 在真控制台里的行为"——编进来就测不到
 //   Terminal/资源嵌入/清单这些东西。所以本套件启动的是构建产物本身。
 //
-// 断言核心是"断开时主循环把 15 个开关全复位"—— 这条只能靠真实主循环验证。
+// 断言核心是"断开时主循环把全部开关复位"—— 这条只能靠真实主循环验证。
+//
+// 版本差异（用 #if DE 区分）：
+//   终极版 15 项功能（普通 1-9 含无限冲刺 7、特殊 Ctrl+1-6 含一命保护 Ctrl+6）；
+//   原版 13 项（少无限冲刺与一命保护，键位紧凑前移：无限能力点数 7、显示地图 8、
+//   特殊 Ctrl+1-5）。按键序列与命令计数因此两套。
 
 using System;
 using System.Collections.Generic;
@@ -197,13 +202,24 @@ namespace OriTrainerTests
                 return Has(screen, "已连接");
             }, 10000);
             Test.Check("界面显示已连接", connected, "screen=" + Dump(screen));
-            Test.Check("初始 15 个开关全关", Count(screen, "[ ]") == 15 && Count(screen, "[x]") == 0,
+
+#if DE
+            const int Total = 15; // 终极版功能总数
+#else
+            const int Total = 13; // 原版功能总数
+#endif
+            Test.Check("初始 " + Total + " 个开关全关", Count(screen, "[ ]") == Total && Count(screen, "[x]") == 0,
                 "off=" + Count(screen, "[ ]") + " on=" + Count(screen, "[x]") + " screen=" + Dump(screen));
 
             // ---- 3 个普通热键 ----
+            // DE：小键盘 1/3/9（9=显示地图）；原版：小键盘 1/3/8（显示地图紧凑前移到 8）。
             Tap(0x61, false);
             Tap(0x63, false);
-            Tap(0x69, false);
+#if DE
+            Tap(0x69, false); // 小键盘 9 = 显示地图（终极版）
+#else
+            Tap(0x68, false); // 小键盘 8 = 显示地图（原版）
+#endif
 
             Test.Check("按 3 个热键后界面 3 个开启",
                 Test.WaitFor(() => { screen = Screen(trainer.Id); return Count(screen, "[x]") == 3; }, 4000),
@@ -214,14 +230,23 @@ namespace OriTrainerTests
                 CmdsAre("UnlimitedLife Start", "SoulFlameNoCooldown Start", "ShowMap Start"),
                 "cmds=" + string.Join(" | ", CmdLines().ToArray()));
 
-            // ---- Ctrl+小键盘 6 ----
+            // ---- Ctrl+组合键：DE 用 Ctrl+小键盘 6（一命保护），原版用 Ctrl+小键盘 5（三把钥匙）----
+#if DE
             Tap(0x66, true);
-            Test.Check("Ctrl+小键盘 6 开启第 4 项",
+#else
+            Tap(0x65, true);
+#endif
+            Test.Check("Ctrl 组合键开启第 4 项",
                 Test.WaitFor(() => { screen = Screen(trainer.Id); return Count(screen, "[x]") == 4; }, 4000),
                 "on=" + Count(screen, "[x]") + " screen=" + Dump(screen));
+#if DE
+            string fourth = "OneLifeProtect Start";
+#else
+            string fourth = "GrantKeys Start";
+#endif
             Test.Check("Ctrl 组合键命令正确",
                 Test.WaitFor(() => CountCmds() == 4, 3000) &&
-                CmdsAre("UnlimitedLife Start", "SoulFlameNoCooldown Start", "ShowMap Start", "OneLifeProtect Start"),
+                CmdsAre("UnlimitedLife Start", "SoulFlameNoCooldown Start", "ShowMap Start", fourth),
                 "cmds=" + string.Join(" | ", CmdLines().ToArray()));
 
             // ---- 再按一次同一键 = 关闭 ----
@@ -235,26 +260,41 @@ namespace OriTrainerTests
 
             // ---- HOME：还有没开的 → 全部打开 ----
             Tap(0x24, false);
-            Test.Check("HOME 全部开启 15 个",
-                Test.WaitFor(() => { screen = Screen(trainer.Id); return Count(screen, "[x]") == 15; }, 5000),
+            Test.Check("HOME 全部开启 " + Total + " 个",
+                Test.WaitFor(() => { screen = Screen(trainer.Id); return Count(screen, "[x]") == Total; }, 5000),
                 "on=" + Count(screen, "[x]") + " screen=" + Dump(screen));
+#if DE
             // 原本开着 3 个（SoulFlameNoCooldown/ShowMap/OneLifeProtect），所以只补发 12 条
             Test.Check("HOME 只对关着的 12 项发 Start", Test.WaitFor(() => CountCmds() == 17, 4000),
                 "count=" + CountCmds() + " cmds=" + string.Join(" | ", CmdLines().ToArray()));
+#else
+            // 原本开着 3 个（SoulFlameNoCooldown/ShowMap/GrantKeys），所以只补发 10 条
+            Test.Check("HOME 只对关着的 10 项发 Start", Test.WaitFor(() => CountCmds() == 15, 4000),
+                "count=" + CountCmds() + " cmds=" + string.Join(" | ", CmdLines().ToArray()));
+#endif
 
             // ---- HOME 再来一次：已全开 → 全部关闭 ----
             Tap(0x24, false);
             Test.Check("再按 HOME 全部关闭",
-                Test.WaitFor(() => { screen = Screen(trainer.Id); return Count(screen, "[x]") == 0 && Count(screen, "[ ]") == 15; }, 5000),
+                Test.WaitFor(() => { screen = Screen(trainer.Id); return Count(screen, "[x]") == 0 && Count(screen, "[ ]") == Total; }, 5000),
                 "on=" + Count(screen, "[x]") + " screen=" + Dump(screen));
+#if DE
             Test.Check("HOME 关闭发了 15 条 Stop", Test.WaitFor(() => CountCmds() == 32, 4000),
                 "count=" + CountCmds());
+#else
+            Test.Check("HOME 关闭发了 13 条 Stop", Test.WaitFor(() => CountCmds() == 28, 4000),
+                "count=" + CountCmds());
+#endif
 
-            // ---- 杀游戏：界面回到未检测到 + 15 个开关全复位 ----
+            // ---- 杀游戏：界面回到未检测到 + 开关全复位 ----
             // 先开几个，确认复位真的发生了（而不是本来就没开）
             Tap(0x61, false);
             Tap(0x62, false);
+#if DE
             Test.WaitFor(() => CountCmds() == 34, 3000);
+#else
+            Test.WaitFor(() => CountCmds() == 30, 3000);
+#endif
             Test.Check("杀游戏前有 2 项开着",
                 Test.WaitFor(() => { screen = Screen(trainer.Id); return Count(screen, "[x]") == 2; }, 3000),
                 "on=" + Count(screen, "[x]"));
@@ -264,10 +304,10 @@ namespace OriTrainerTests
             bool reset = Test.WaitFor(() =>
             {
                 screen = Screen(trainer.Id);
-                return Has(screen, "未检测到游戏进程") && Count(screen, "[x]") == 0 && Count(screen, "[ ]") == 15;
+                return Has(screen, "未检测到游戏进程") && Count(screen, "[x]") == 0 && Count(screen, "[ ]") == Total;
             }, 8000);
             Test.Check("断开后显示未检测到游戏进程", Has(screen, "未检测到游戏进程"), "screen=" + Dump(screen));
-            Test.Check("断开后 15 个开关全部复位", reset && Count(screen, "[x]") == 0 && Count(screen, "[ ]") == 15,
+            Test.Check("断开后 " + Total + " 个开关全部复位", reset && Count(screen, "[x]") == 0 && Count(screen, "[ ]") == Total,
                 "on=" + Count(screen, "[x]") + " off=" + Count(screen, "[ ]") + " screen=" + Dump(screen));
 
             // ---- 断开期间按热键 ----
@@ -286,7 +326,7 @@ namespace OriTrainerTests
             Test.Check("重启游戏后自动重连",
                 Test.WaitFor(() => { screen = Screen(trainer.Id); return Has(screen, "已连接"); }, 10000),
                 "screen=" + Dump(screen));
-            Test.Check("重连后开关仍全关（不自动恢复）", Count(screen, "[x]") == 0 && Count(screen, "[ ]") == 15,
+            Test.Check("重连后开关仍全关（不自动恢复）", Count(screen, "[x]") == 0 && Count(screen, "[ ]") == Total,
                 "on=" + Count(screen, "[x]"));
 
             int b2 = CountCmds();

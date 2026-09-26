@@ -3,20 +3,25 @@
   <!--
     假游戏：测试专用的对端进程。
 
-    产物必须叫 oriDE.exe —— PipeClient 是按进程名 "oriDE" 去找游戏的，
+    产物名必须与 PipeClient 扫描的进程名一致，按 Edition 区分：
+      终极版 oriDE.exe（PipeClient 扫 "oriDE"）
+      原版   ori.exe（PipeClient 扫 "ori"）
     换成别的名字它根本不会认。测试项目负责把它复制到两个位置：
-      <测试输出>\oriDE.exe          仅提供管道（测连接与命令流）
-      <测试输出>\FakeGame\oriDE.exe 同时模拟 Unity 写日志（测就绪门）
+      <测试输出>\<进程名>.exe            仅提供管道（测连接与命令流）
+      <测试输出>\FakeGame\<进程名>.exe   同时模拟 Unity 写日志（测就绪门）
 
     为什么单独一个 exe 而不是测试项目的一个分支：
-    它必须以 oriDE 为名、以独立进程运行，PipeClient 才能通过进程扫描发现它。
+    它必须以 oriDE/ori 为名、以独立进程运行，PipeClient 才能通过进程扫描发现它。
 
     平台必须是 x86，与真游戏一致 —— 避免测试环境与真实环境在位数上产生差异。
   -->
   <PropertyGroup>
+    <Edition Condition="'$(Edition)'==''">Vanilla</Edition>
+
     <TargetFramework>net48</TargetFramework>
     <OutputType>Exe</OutputType>
-    <AssemblyName>oriDE</AssemblyName>
+    <AssemblyName Condition="'$(Edition)'=='DE'">oriDE</AssemblyName>
+    <AssemblyName Condition="'$(Edition)'!='DE'">ori</AssemblyName>
     <RootNamespace>FakeGame</RootNamespace>
     <PlatformTarget>x86</PlatformTarget>
     <RuntimeIdentifier>win-x86</RuntimeIdentifier>

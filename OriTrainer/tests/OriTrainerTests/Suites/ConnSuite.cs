@@ -1,4 +1,4 @@
-// 连接状态机：直接调用真实的 PipeClient / Status，用假 oriDE.exe 当对端，
+// 连接状态机：直接调用真实的 PipeClient / Status，用假游戏（oriDE.exe / ori.exe）当对端，
 // 断言状态迁移与命令流。
 //
 // 本套件不碰真游戏、不碰 DLL —— 注入一段必然失败（假游戏没有 mono.dll），

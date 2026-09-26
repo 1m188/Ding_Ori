@@ -25,21 +25,46 @@ namespace OriTrainerTests
             get { return Path.GetDirectoryName(typeof(Test).Assembly.Location); }
         }
 
-        // 仅管道模式的假游戏（放在输出根目录）
+        // 仅管道模式的假游戏（放在输出根目录）。
+        // 产物名按 Edition 变：DE 版 oriDE.exe、原版 ori.exe（PipeClient 按进程名扫描）。
         public static string FakeExe
         {
-            get { return Path.Combine(Dir, "oriDE.exe"); }
+            get
+            {
+                return Path.Combine(Dir,
+#if DE
+                    "oriDE.exe");
+#else
+                    "ori.exe");
+#endif
+            }
         }
 
-        // 日志模式的假游戏（放在 FakeGame\ 子目录，日志随之落在 FakeGame\OriDE_Data\）
+        // 日志模式的假游戏（放在 FakeGame\ 子目录，日志随之落在 FakeGame\<数据目录>\）
         public static string LoggedFakeExe
         {
-            get { return Path.Combine(Dir, "FakeGame", "oriDE.exe"); }
+            get
+            {
+                return Path.Combine(Dir, "FakeGame",
+#if DE
+                    "oriDE.exe");
+#else
+                    "ori.exe");
+#endif
+            }
         }
 
         public static string LoggedGameLog
         {
-            get { return Path.Combine(Dir, "FakeGame", "OriDE_Data", "output_log.txt"); }
+            get
+            {
+                return Path.Combine(Dir, "FakeGame",
+#if DE
+                    "OriDE_Data", "output_log.txt");
+#else
+                    "ori_Data", "output_log.txt");
+#endif
+            }
         }
 
         public static string GrabExe
@@ -51,14 +76,20 @@ namespace OriTrainerTests
         //
         // 不能靠"从输出目录往上数几层"来拼路径 —— 层数会随 TFM/RID 变化而失效
         // （踩过一次：数错一层，指向了 tests\OriTrainerTests\src\... 这个不存在的位置）。
-        // 改为直接写死绝对的仓库根，并且【先验证它真的存在】，不存在就明确报出来，
+        // 改为直接写死相对的仓库内路径，并且【先验证它真的存在】，不存在就明确报出来，
         // 而不是让 E2E/Soak 拿着一个坏路径去启动进程、报一个看不懂的错。
+        // 文件名按 Edition 变：DE 版 OriTrainerDE.exe、原版 OriTrainer.exe。
         public static string TrainerExe
         {
             get
             {
                 return Path.GetFullPath(Path.Combine(RepoRoot,
-                    @"src\OriTrainer\bin\Release\net48\win-x86\OriTrainer.exe"));
+                    @"src\OriTrainer\bin\Release\net48\win-x86\",
+#if DE
+                    "OriTrainerDE.exe"));
+#else
+                    "OriTrainer.exe"));
+#endif
             }
         }
 
@@ -106,14 +137,19 @@ namespace OriTrainerTests
 
         // ---- 假游戏 ----
 
-        // 杀掉所有残留假游戏。每个套件开头都要做，否则上一轮没清干净的 oriDE
+        // 杀掉所有残留假游戏。每个套件开头都要做，否则上一轮没清干净的假游戏
         // 会让 PipeClient 立刻"发现游戏"，断言全乱。
+        // 两个进程名都杀：跨 Edition 切换构建时，上一版（oriDE 或 ori）的残留
+        // 也可能还在，一并清掉最稳妥。
         public static void KillFakes()
         {
-            foreach (Process p in Process.GetProcessesByName("oriDE"))
+            foreach (string name in new[] { "oriDE", "ori" })
             {
-                try { p.Kill(); p.WaitForExit(2000); } catch { }
-                p.Dispose();
+                foreach (Process p in Process.GetProcessesByName(name))
+                {
+                    try { p.Kill(); p.WaitForExit(2000); } catch { }
+                    p.Dispose();
+                }
             }
         }
 

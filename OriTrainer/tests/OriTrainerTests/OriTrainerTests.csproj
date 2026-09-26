@@ -18,6 +18,8 @@
     注释里不能出现连续两个连字符，所以这里用方括号做分隔，不用长横线。
   -->
   <PropertyGroup>
+    <Edition Condition="'$(Edition)'==''">Vanilla</Edition>
+
     <TargetFramework>net48</TargetFramework>
     <OutputType>Exe</OutputType>
     <AssemblyName>OriTrainerTests</AssemblyName>
@@ -35,11 +37,11 @@
     -->
     <NoWarn>$(NoWarn);CS0649</NoWarn>
     <!--
-      测试套件按终极版设计（假游戏叫 oriDE.exe、E2E 跑真实 DE 版 exe），
-      所以编译进来的产品源码要定义 DE 常量，让 #if DE 走终极版分支。
-      若将来要为原版加测试，再按 Edition 区分。
+      条件编译开关：DE 版定义 DE，原版不定义 —— 与产品项目同一套 Edition。
+      编译进来的产品源码（PipeClient/Status 等）和套件里的版本差异断言
+      （E2E 的功能数、键位、假游戏进程名）都靠它切分支。
     -->
-    <DefineConstants>$(DefineConstants);DE</DefineConstants>
+    <DefineConstants Condition="'$(Edition)'=='DE'">$(DefineConstants);DE</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
@@ -64,9 +66,10 @@
 
   <!--
     假游戏与截图工具随测试项目一起构建，并被复制到测试输出目录。
-    假游戏【必须】叫 oriDE.exe（PipeClient 按进程名扫描），
+    假游戏【必须】叫 oriDE.exe（DE）/ ori.exe（原版）—— PipeClient 按进程名扫描，
     并额外复制一份到 FakeGame\ 供"日志模式"用 —— 那种模式下
-    日志路径由进程主模块目录推出，即 FakeGame\OriDE_Data\output_log.txt。
+    日志路径由进程主模块目录推出，即 FakeGame\<数据目录>\output_log.txt。
+    产物名由 FakeGame 项目按 Edition 决定，这里引用 $(FakeGameOut) 不写死。
   -->
   <ItemGroup>
     <ProjectReference Include="..\FakeGame\FakeGame.csproj">
@@ -79,7 +82,7 @@
 
   <!--
     被测的真实 exe：只用来保证构建顺序，不引用其程序集。
-    E2E 直接启动它的输出文件。
+    E2E 直接启动它的输出文件（名字按 Edition 变，见 Test.TrainerExe）。
   -->
   <ItemGroup>
     <ProjectReference Include="..\..\src\OriTrainer\OriTrainer.csproj">
@@ -91,7 +94,9 @@
   <Target Name="StageTestHelpers" AfterTargets="Build">
     <!-- 兄弟项目的输出路径。$(MSBuildThisFileDirectory) 已含末尾反斜杠 -->
     <PropertyGroup>
-      <FakeGameOut>$(MSBuildThisFileDirectory)..\FakeGame\bin\$(Configuration)\net48\win-x86\oriDE.exe</FakeGameOut>
+      <FakeGameName Condition="'$(Edition)'=='DE'">oriDE</FakeGameName>
+      <FakeGameName Condition="'$(Edition)'!='DE'">ori</FakeGameName>
+      <FakeGameOut>$(MSBuildThisFileDirectory)..\FakeGame\bin\$(Configuration)\net48\win-x86\$(FakeGameName).exe</FakeGameOut>
       <GrabOut>$(MSBuildThisFileDirectory)..\Grab\bin\$(Configuration)\net48\win-x86\Grab.exe</GrabOut>
     </PropertyGroup>
 
@@ -102,7 +107,7 @@
     <Copy SourceFiles="$(FakeGameOut)" DestinationFolder="$(OutDir)" />
     <Copy SourceFiles="$(GrabOut)" DestinationFolder="$(OutDir)" />
 
-    <!-- 日志模式：单独的 FakeGame 目录，以便日志落在 FakeGame\OriDE_Data\ -->
+    <!-- 日志模式：单独的 FakeGame 目录，以便日志落在 FakeGame\<数据目录>\ -->
     <Copy SourceFiles="$(FakeGameOut)" DestinationFolder="$(OutDir)FakeGame" />
   </Target>
 
