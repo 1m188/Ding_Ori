@@ -19,42 +19,38 @@ namespace OriTrainerDLL.Features
     // （SeinSoulFlame），否则栈不平衡。replacement 不调用原方法体（返回即"空操作"）。
     //
     // ---- 停止 ----
-    // Stop() 只 Unhook，还原 HandleCooldown 原始字节。之后冷却恢复原逻辑（自然衰减）。
+    // Stop() 只还原 HandleCooldown 原始字节。之后冷却恢复原逻辑（自然衰减）。
     public static class SoulFlameNoCooldown
     {
         private static readonly BindingFlags Private =
             BindingFlags.NonPublic | BindingFlags.Instance;
 
-        private static MethodInfo _target;    // SeinSoulFlame.HandleCooldown
-        private static MethodInfo _replacement; // 我们的 replacement
-        private static FieldInfo _fCooldown;  // m_cooldownRemaining
+        private static Hooks.Hook _hook;
+        private static FieldInfo _fCooldown; // m_cooldownRemaining
 
         public static void Start()
         {
-            if (Hooks.IsHooked(_target)) return; // 幂等：重复 Start 不重复 hook
-
-            Type t = typeof(SeinSoulFlame);
-            _target = t.GetMethod("HandleCooldown", Private);
-            _fCooldown = t.GetField("m_cooldownRemaining", Private);
-
             // 字段/方法名对不上就直接失败（Loader 会记进错误日志），而不是静默空转
-            if (_target == null || _fCooldown == null)
+            Type t = typeof(SeinSoulFlame);
+            MethodInfo target = t.GetMethod("HandleCooldown", Private);
+            _fCooldown = t.GetField("m_cooldownRemaining", Private);
+            if (target == null || _fCooldown == null)
                 throw new Exception("SeinSoulFlame 的 HandleCooldown/m_cooldownRemaining 与预期不符，功能无法工作");
 
-            // replacement 必须是实例方法，签名与 HandleCooldown 兼容（this=SeinSoulFlame）
-            _replacement = typeof(SoulFlameNoCooldown).GetMethod("OnHandleCooldown",
-                BindingFlags.NonPublic | BindingFlags.Static);
-
-            Hooks.Replace(_target, _replacement);
+            // HandleCooldown 变空操作；replacement 里把冷却字段清 0。
+            // Apply 幂等，重复 Start 安全。
+            if (_hook == null)
+                _hook = Hooks.Hook.Apply(target,
+                    typeof(SoulFlameNoCooldown).GetMethod("OnHandleCooldown",
+                        BindingFlags.NonPublic | BindingFlags.Static));
         }
 
         public static void Stop()
         {
-            if (!Hooks.IsHooked(_target)) return; // 幂等
+            if (_hook == null) return; // 幂等
 
-            Hooks.Unhook(_target);
-            _target = null;
-            _replacement = null;
+            _hook.Dispose();
+            _hook = null;
             _fCooldown = null;
         }
 
