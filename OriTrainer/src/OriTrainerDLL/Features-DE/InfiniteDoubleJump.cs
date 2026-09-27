@@ -69,9 +69,7 @@ namespace OriTrainerDLL.Features
 
             // Scheduler 由 GameController 持有，而 GameController.Awake 是单例守卫
             // （Instance 已存在则 Destroy 自身），所以该回调在整个进程内稳定可用。
-            GameScheduler scheduler = Game.Events.Scheduler;
-            if (scheduler == null)
-                throw new Exception("GameScheduler 尚未就绪（游戏未启动完成），功能无法挂载");
+            GameScheduler scheduler = Game.Events.Scheduler ?? throw new Exception("GameScheduler 尚未就绪（游戏未启动完成），功能无法挂载");
 
             _hook = OnGameFixedUpdate;
             scheduler.OnGameFixedUpdate.Add(_hook);
@@ -112,8 +110,7 @@ namespace OriTrainerDLL.Features
                 // 内部 Instantiate() 会经 BroadcastMessage 回填 SeinAbilities.DoubleJump。
                 // set_IsInstantiated 对同值会提前 return，每帧调用没有开销。
                 SeinPrefabFactory prefabs = sein.Prefabs;
-                if (prefabs != null)
-                    prefabs.EnsureRightPrefabsAreThereForAbilities();
+                prefabs?.EnsureRightPrefabsAreThereForAbilities();
 
                 // ③④ 跳跃次数与锁定时间（组件刚由 ② 实例化，此处已可读到）
                 SeinAbilities abilities = sein.Abilities;

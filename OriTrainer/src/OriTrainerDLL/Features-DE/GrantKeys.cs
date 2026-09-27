@@ -1,5 +1,4 @@
 using System;
-using System.Threading;
 
 namespace OriTrainerDLL.Features
 {
@@ -36,16 +35,16 @@ namespace OriTrainerDLL.Features
     // 检查点的 false → 钥匙没了。持续写把这个窗口彻底关掉。另外 GameController.
     // RestartGame / RestartOneLifeMode 会触发 GameScheduler.OnGameReset 把三个字段
     // 全部清 0，同样需要补回。
-    // 写了守卫是因为正常游玩时它们几乎恒为 true，写入次数 ≈ 被回滚的次数，而不是
-    // 每秒 100 次（与 ZeroDeaths 同理）。
+    // 写了守卫是因为正常游玩时它们几乎恒为 true，写入次数 ≈ 被回滚的次数
     //
-    // ---- 为什么不需要主线程钩子 ----
+    // ---- 为什么挂主线程钩子 ----
     // 与 UnlockAllAbilities / InfiniteDash 不同，那些必须挂 OnGameFixedUpdate 是因为
     // 要调 Object.Instantiate 之类的 Unity API。这里只是三个静态 bool，且消费者
     // ActivateBasedOnCondition / ActivationBasedOnCondition 每 FixedUpdate 轮询
     // Condition.Validate()，标志一置，门和暂停界面图标会在下一个 FixedUpdate（20ms 内）
-    // 自动跟上。写静态字段本身也不挑线程，因此与 ZeroDeaths / CompleteExploration
-    // 一样用定时器即可。
+    // 自动跟上。写静态字段本身也不挑线程，本来用定时器即可；但原版游戏（Unity 5.0
+    // 内置的旧 Mono 2.x）里注入 DLL 的 System.Threading.Timer 不可靠（回调不触发，
+    // 实测），所以统一改挂游戏自己的每帧回调 OnGameFixedUpdate。
     // 也因为没有实例（static class），不像 ZeroDeaths 那样需要判 Instance == null。
     //
     // ---- 停止不还原 ----
@@ -63,28 +62,33 @@ namespace OriTrainerDLL.Features
     //     DoorWithSlots 消耗它）——那是"量"，与本功能的"三把门钥匙"是两套无关系统。
     public static class GrantKeys
     {
-        private const int IntervalMs = 10;
-
-        private static Timer _timer;
+        private static Action _hook; // 保留引用以便 Stop 时注销
 
         public static void Start()
         {
-            if (_timer != null) return; // 幂等：重复 Start 不重复起定时器
+            if (_hook != null) return; // 幂等：重复 Start 不重复挂载
 
-            _timer = new Timer(Tick, null, 0, IntervalMs);
+            // Scheduler 由 GameController 持有，而 GameController.Awake 是单例守卫
+            // （Instance 已存在则 Destroy 自身），所以该回调在整个进程内稳定可用。
+            GameScheduler scheduler = Game.Events.Scheduler ?? throw new Exception("GameScheduler 尚未就绪（游戏未启动完成），功能无法挂载");
+
+            _hook = OnGameFixedUpdate;
+            scheduler.OnGameFixedUpdate.Add(_hook);
         }
 
         public static void Stop()
         {
-            if (_timer == null) return;
+            if (_hook == null) return;
 
-            _timer.Dispose();
-            _timer = null;
+            Game.Events.Scheduler.OnGameFixedUpdate.Remove(_hook);
+            _hook = null;
         }
 
-        private static void Tick(object state)
+        // 由游戏主线程每个 FixedUpdate 调用
+        private static void OnGameFixedUpdate()
         {
-            // 定时器回调里的未捕获异常会终止整个进程（即游戏），必须自己兜住
+            // 游戏回调里抛出的异常会顺着 GameController.FixedUpdate 冒到 Unity，
+            // 后果不可预期，必须自己兜住
             try
             {
                 if (!Sein.World.Keys.GinsoTree) Sein.World.Keys.GinsoTree = true;         // Ginso Tree 门钥匙

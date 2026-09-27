@@ -1,35 +1,44 @@
 using System;
-using System.Threading;
 
 namespace OriTrainerDLL.Features
 {
     // 重置时间：把游玩计时器归零，暂停界面显示 0:00:00。
     // 实现同终极版：GameTimer.Instance/CurrentTime/Reset() 全是 public，直接调官方方法。
     // 停止不还原：CurrentTime 是存档字段，开启期间存过档 0 就已落盘。
+    //
+    // 挂游戏自己的每帧回调 OnGameFixedUpdate（原版旧 Mono 的 System.Threading.Timer
+    // 不可靠，回调不触发）。
     public static class ResetTime
     {
-        private const int IntervalMs = 10;
-
-        private static Timer _timer;
+        private static Action _hook; // 保留引用以便 Stop 时注销
 
         public static void Start()
         {
-            if (_timer != null) return; // 幂等：重复 Start 不重复起定时器
+            if (_hook != null) return; // 幂等：重复 Start 不重复挂载
 
-            _timer = new Timer(Tick, null, 0, IntervalMs);
+            // Scheduler 由 GameController 持有，而 GameController.Awake 是单例守卫
+            // （Instance 已存在则 Destroy 自身），所以该回调在整个进程内稳定可用。
+            GameScheduler scheduler = Game.Events.Scheduler ?? throw new Exception("GameScheduler 尚未就绪（游戏未启动完成），功能无法挂载");
+
+            _hook = OnGameFixedUpdate;
+            scheduler.OnGameFixedUpdate.Add(_hook);
         }
 
         public static void Stop()
         {
-            if (_timer == null) return;
+            if (_hook == null) return;
 
-            _timer.Dispose();
-            _timer = null;
+            Game.Events.Scheduler.OnGameFixedUpdate.Remove(_hook);
+            _hook = null;
+
+            // 刻意不还原 CurrentTime：见文件头"停止不还原"
         }
 
-        private static void Tick(object state)
+        // 由游戏主线程每个 FixedUpdate 调用
+        private static void OnGameFixedUpdate()
         {
-            // 定时器回调里的未捕获异常会终止整个进程（即游戏），必须自己兜住
+            // 游戏回调里抛出的异常会顺着 GameController.FixedUpdate 冒到 Unity，
+            // 后果不可预期，必须自己兜住
             try
             {
                 // 主菜单/读档过程中该单例可能尚未建立；每次都重新读静态字段：

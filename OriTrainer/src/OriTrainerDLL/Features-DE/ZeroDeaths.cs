@@ -1,6 +1,5 @@
 using System;
 using System.Reflection;
-using System.Threading;
 
 namespace OriTrainerDLL.Features
 {
@@ -41,11 +40,12 @@ namespace OriTrainerDLL.Features
     // 这条链上没有任何 Unity native 调用（逐层核过 IL）：
     //     get_Count → ldsfld Instance / Object::op_Equality / ldfld m_deathCounter
     //     Object::op_Equality → CompareBaseObjects → IsNativeObjectAlive → GetCachedPtr
-    // 全部是托管 IL，所以与 UnlimitedLife / UnlimitedEnergy 一样用定时器即可，
-    // 不像 InfiniteDash / InfiniteDoubleJump / ShowMap 那样必须挂 OnGameFixedUpdate。
+    // 全部是托管 IL，本来用定时器即可。但原版游戏（Unity 5.0 内置的旧 Mono 2.x）里
+    // 注入 DLL 的 System.Threading.Timer 不可靠（回调不触发，实测），所以统一改挂
+    // 游戏自己的每帧回调 OnGameFixedUpdate
     //
     // ---- 停止不还原 ----
-    // Stop() 只停定时器，不回写原值：m_deathCounter 是存档字段（SeinDeathCounter
+    // Stop() 只注销钩子，不回写原值：m_deathCounter 是存档字段（SeinDeathCounter
     // 继承 SaveSerialize，Serialize 里就是 ar.Serialize(ref m_deathCounter)），
     // 游戏自然存档时 0 就已经落盘，还原只会给出"能收回来"的假象。
     // 停止后死亡数从当前值（0）继续正常累加。
@@ -57,35 +57,40 @@ namespace OriTrainerDLL.Features
     //     SeinDeathCounter.SendTelemetryData 读的也是这个字段，会读到 0。
     public static class ZeroDeaths
     {
-        private const int IntervalMs = 10;
-
         private static readonly BindingFlags Private =
             BindingFlags.NonPublic | BindingFlags.Instance;
 
         private static FieldInfo _fCount; // m_deathCounter
-        private static Timer _timer;
+        private static Action _hook;      // 保留引用以便 Stop 时注销
 
         public static void Start()
         {
-            if (_timer != null) return; // 幂等：重复 Start 不重复起定时器
+            if (_hook != null) return; // 幂等：重复 Start 不重复挂载
 
-            // 字段名对不上就直接失败（Loader 会记进错误日志），而不是每 10ms 静默空转
+            // 字段名对不上就直接失败（Loader 会记进错误日志），而不是每帧静默空转
             _fCount = typeof(SeinDeathCounter).GetField("m_deathCounter", Private) ?? throw new Exception("SeinDeathCounter 的字段名与预期不符，功能无法工作");
 
-            _timer = new Timer(Tick, null, 0, IntervalMs);
+            // Scheduler 由 GameController 持有，而 GameController.Awake 是单例守卫
+            // （Instance 已存在则 Destroy 自身），所以该回调在整个进程内稳定可用。
+            GameScheduler scheduler = Game.Events.Scheduler ?? throw new Exception("GameScheduler 尚未就绪（游戏未启动完成），功能无法挂载");
+
+            _hook = OnGameFixedUpdate;
+            scheduler.OnGameFixedUpdate.Add(_hook);
         }
 
         public static void Stop()
         {
-            if (_timer == null) return;
+            if (_hook == null) return;
 
-            _timer.Dispose();
-            _timer = null;
+            Game.Events.Scheduler.OnGameFixedUpdate.Remove(_hook);
+            _hook = null;
         }
 
-        private static void Tick(object state)
+        // 由游戏主线程每个 FixedUpdate 调用
+        private static void OnGameFixedUpdate()
         {
-            // 定时器回调里的未捕获异常会终止整个进程（即游戏），必须自己兜住
+            // 游戏回调里抛出的异常会顺着 GameController.FixedUpdate 冒到 Unity，
+            // 后果不可预期，必须自己兜住
             try
             {
                 // 未进游戏、或对象已销毁时为 null。SeinDeathCounter 是 MonoBehaviour，
@@ -95,7 +100,7 @@ namespace OriTrainerDLL.Features
                 if (counter == null) return;
 
                 // 走 public 的 Count 读（无副作用），走反射写（绕开 setter 的存档动作）。
-                // 正常游玩时写入次数 ≈ 死亡次数，而不是每秒 100 次。
+                // 正常游玩时写入次数 ≈ 死亡次数，而不是每秒 50 次。
                 if (SeinDeathCounter.Count > 0)
                     _fCount.SetValue(counter, 0);
             }

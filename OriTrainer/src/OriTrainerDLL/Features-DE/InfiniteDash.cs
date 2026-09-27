@@ -61,18 +61,13 @@ namespace OriTrainerDLL.Features
         {
             if (_hook != null) return; // 幂等：重复 Start 不重复挂载
 
-            _fLastDashTime = typeof(SeinDashAttack).GetField("m_lastDashTime", Private);
-
             // 字段名对不上就直接失败（Loader 会记进错误日志），而不是每帧静默空转
-            if (_fLastDashTime == null)
-                throw new Exception("SeinDashAttack 的字段名与预期不符，功能无法工作");
+            _fLastDashTime = typeof(SeinDashAttack).GetField("m_lastDashTime", Private) ?? throw new Exception("SeinDashAttack 的字段名与预期不符，功能无法工作");
 
             // Scheduler 由 GameController 持有，而 GameController.Awake 是单例守卫
             // （Instance 已存在则 Destroy 自身），所以该回调在整个进程内稳定可用。
             // 游戏尚未启动到 GameController 时取出会得到 null 或抛异常，直接报错更易排查。
-            GameScheduler scheduler = Game.Events.Scheduler;
-            if (scheduler == null)
-                throw new Exception("GameScheduler 尚未就绪（游戏未启动完成），功能无法挂载");
+            GameScheduler scheduler = Game.Events.Scheduler ?? throw new Exception("GameScheduler 尚未就绪（游戏未启动完成），功能无法挂载");
 
             _hook = OnGameFixedUpdate;
             scheduler.OnGameFixedUpdate.Add(_hook);
@@ -118,8 +113,7 @@ namespace OriTrainerDLL.Features
                 // 内部 Instantiate() 会经 BroadcastMessage 回填 SeinAbilities.Dash。
                 // set_IsInstantiated 对同值会提前 return，每帧调用没有开销。
                 SeinPrefabFactory prefabs = sein.Prefabs;
-                if (prefabs != null)
-                    prefabs.EnsureRightPrefabsAreThereForAbilities();
+                prefabs?.EnsureRightPrefabsAreThereForAbilities();
 
                 // ④ 次数与冷却（组件刚由 ③ 实例化，此处已可读到）
                 SeinAbilities abilities = sein.Abilities;

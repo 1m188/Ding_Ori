@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
-using System.Threading;
 
 namespace OriTrainerDLL.Features
 {
@@ -33,17 +32,19 @@ namespace OriTrainerDLL.Features
     // 因此达不到 100%，见文件末说明）。golang 版是裸内存写
     // +0x14 / +0x18，这里用元数据取同样的效果，不必自己算偏移。
     //
-    // ---- 为什么不需要主线程钩子 ----
+    // ---- 为什么挂主线程钩子 ----
     // 这条链上没有任何 Unity native 调用：GameWorld.Instance 判空走
     // UnityEngine.Object::op_Equality → CompareBaseObjects → IsNativeObjectAlive →
     // GetCachedPtr，全是托管 IL；遍历 RuntimeAreas（普通 List<T>）与写字段同理。
-    // 所以与 UnlimitedLife / ZeroDeaths 一样用定时器即可。
+    // 本来用定时器即可。但原版游戏（Unity 5.0 内置的旧 Mono 2.x）里注入 DLL 的
+    // System.Threading.Timer 不可靠（回调不触发，实测），所以统一改挂游戏自己的
+    // 每帧回调 OnGameFixedUpdate，与 InfiniteDash / ShowMap 同模式。
     //
     // ---- 遍历不用手工解引用 ----
     // 这里 GameWorld.RuntimeAreas 是 public 的 List<RuntimeGameWorldArea>，直接 foreach。
     //
     // ---- 停止不还原 ----
-    // Stop() 只停定时器。m_completionAmount 是纯运行时缓存，不进存档
+    // Stop() 只注销钩子。m_completionAmount 是纯运行时缓存，不进存档
     // （RuntimeGameWorldArea.Serialize 只写 m_worldAreaStates 与 Icons），
     // 重启游戏后界面自然回到真实完成度；而成就一经授予即永久保留。
     // 因此还原没有意义 —— 本功能的作用是"让采样那一刻读到 1.0"。
@@ -61,41 +62,46 @@ namespace OriTrainerDLL.Features
     // 成就闸门是 CheatsHandler.DebugWasEnabled（开过官方作弊菜单才会被拦下）。
     public static class CompleteExploration
     {
-        private const int IntervalMs = 10;
-
         private static readonly BindingFlags Private =
             BindingFlags.NonPublic | BindingFlags.Instance;
 
         private static FieldInfo _fAmount; // m_completionAmount (Single, 0..1)
         private static FieldInfo _fDirty;  // m_dirtyCompletionAmount (Boolean)
-        private static Timer _timer;
+        private static Action _hook;       // 保留引用以便 Stop 时注销
 
         public static void Start()
         {
-            if (_timer != null) return; // 幂等：重复 Start 不重复起定时器
+            if (_hook != null) return; // 幂等：重复 Start 不重复挂载
 
             Type t = typeof(RuntimeGameWorldArea);
             _fAmount = t.GetField("m_completionAmount", Private);
             _fDirty = t.GetField("m_dirtyCompletionAmount", Private);
 
-            // 字段名对不上就直接失败（Loader 会记进错误日志），而不是每 10ms 静默空转
+            // 字段名对不上就直接失败（Loader 会记进错误日志），而不是每帧静默空转
             if (_fAmount == null || _fDirty == null)
                 throw new Exception("RuntimeGameWorldArea 的字段名与预期不符，功能无法工作");
 
-            _timer = new Timer(Tick, null, 0, IntervalMs);
+            // Scheduler 由 GameController 持有，而 GameController.Awake 是单例守卫
+            // （Instance 已存在则 Destroy 自身），所以该回调在整个进程内稳定可用。
+            GameScheduler scheduler = Game.Events.Scheduler ?? throw new Exception("GameScheduler 尚未就绪（游戏未启动完成），功能无法挂载");
+
+            _hook = OnGameFixedUpdate;
+            scheduler.OnGameFixedUpdate.Add(_hook);
         }
 
         public static void Stop()
         {
-            if (_timer == null) return;
+            if (_hook == null) return;
 
-            _timer.Dispose();
-            _timer = null;
+            Game.Events.Scheduler.OnGameFixedUpdate.Remove(_hook);
+            _hook = null;
         }
 
-        private static void Tick(object state)
+        // 由游戏主线程每个 FixedUpdate 调用
+        private static void OnGameFixedUpdate()
         {
-            // 定时器回调里的未捕获异常会终止整个进程（即游戏），必须自己兜住
+            // 游戏回调里抛出的异常会顺着 GameController.FixedUpdate 冒到 Unity，
+            // 后果不可预期，必须自己兜住
             try
             {
                 // 未进游戏、或对象已销毁时为 null。GameWorld 是 MonoBehaviour，

@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
-using System.Threading;
 
 namespace OriTrainerDLL.Features
 {
@@ -10,43 +9,51 @@ namespace OriTrainerDLL.Features
     // UpdateCompletionAmount() 重算覆盖，所以每周期两件事都做（写 1.0 + 清 dirty）。
     // 目标是用 AchievementsLogic 每 5 秒采样读到 1.0 拿成就；停止不还原
     // （纯运行时缓存，不进存档，成就一经授予即永久）。
+    //
+    // 挂游戏自己的每帧回调 OnGameFixedUpdate（原版旧 Mono 的 System.Threading.Timer
+    // 不可靠，回调不触发）。
     public static class CompleteExploration
     {
-        private const int IntervalMs = 10;
-
         private static readonly BindingFlags Private =
             BindingFlags.NonPublic | BindingFlags.Instance;
 
         private static FieldInfo _fAmount; // m_completionAmount (Single, 0..1)
         private static FieldInfo _fDirty;  // m_dirtyCompletionAmount (Boolean)
-        private static Timer _timer;
+        private static Action _hook;       // 保留引用以便 Stop 时注销
 
         public static void Start()
         {
-            if (_timer != null) return; // 幂等：重复 Start 不重复起定时器
+            if (_hook != null) return; // 幂等：重复 Start 不重复挂载
 
             Type t = typeof(RuntimeGameWorldArea);
             _fAmount = t.GetField("m_completionAmount", Private);
             _fDirty = t.GetField("m_dirtyCompletionAmount", Private);
 
-            // 字段名对不上就直接失败（Loader 会记进错误日志），而不是每 10ms 静默空转
+            // 字段名对不上就直接失败（Loader 会记进错误日志），而不是每帧静默空转
             if (_fAmount == null || _fDirty == null)
                 throw new Exception("RuntimeGameWorldArea 的字段名与预期不符，功能无法工作");
 
-            _timer = new Timer(Tick, null, 0, IntervalMs);
+            // Scheduler 由 GameController 持有，而 GameController.Awake 是单例守卫
+            // （Instance 已存在则 Destroy 自身），所以该回调在整个进程内稳定可用。
+            GameScheduler scheduler = Game.Events.Scheduler ?? throw new Exception("GameScheduler 尚未就绪（游戏未启动完成），功能无法挂载");
+
+            _hook = OnGameFixedUpdate;
+            scheduler.OnGameFixedUpdate.Add(_hook);
         }
 
         public static void Stop()
         {
-            if (_timer == null) return;
+            if (_hook == null) return;
 
-            _timer.Dispose();
-            _timer = null;
+            Game.Events.Scheduler.OnGameFixedUpdate.Remove(_hook);
+            _hook = null;
         }
 
-        private static void Tick(object state)
+        // 由游戏主线程每个 FixedUpdate 调用
+        private static void OnGameFixedUpdate()
         {
-            // 定时器回调里的未捕获异常会终止整个进程（即游戏），必须自己兜住
+            // 游戏回调里抛出的异常会顺着 GameController.FixedUpdate 冒到 Unity，
+            // 后果不可预期，必须自己兜住
             try
             {
                 GameWorld world = GameWorld.Instance;

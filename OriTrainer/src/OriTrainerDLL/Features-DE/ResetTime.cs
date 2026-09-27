@@ -1,5 +1,4 @@
 using System;
-using System.Threading;
 
 namespace OriTrainerDLL.Features
 {
@@ -17,7 +16,7 @@ namespace OriTrainerDLL.Features
     //     000B: ret
     // 即"把 CurrentTime 写 0"本身。所以直接调官方方法即可，零反射、零偏移。
     //
-    // ---- 为什么不需要主线程钩子 ----
+    // ---- 为什么挂主线程钩子 ----
     // CurrentTime 是"值语义"的累加器，不是由其它状态派生的缓存，因此不存在被重算
     // 覆盖的问题。全程序集里写它的地方只有三处（都在 GameTimer 内部）：
     //     GameTimer::Reset           stfld（就是本功能调的）
@@ -28,16 +27,16 @@ namespace OriTrainerDLL.Features
     //     TimeCounterDisplay::Update               GUIText（屏幕右上角计时）
     //     InventoryManager                         暂停界面的 H:MM:SS
     //     SaveSlotInfo::FillData                   Hours / Minutes / Seconds ← 写进存档槽
-    // Reset() 自身只写一个 float 字段，没有任何 Unity native 调用，所以与
-    // UnlimitedLife / ZeroDeaths 一样用定时器即可，不像 InfiniteDash /
-    // InfiniteDoubleJump / ShowMap / UnlockAllAbilities 那样必须挂 OnGameFixedUpdate。
+    // Reset() 自身只写一个 float 字段，没有任何 Unity native 调用。本来用定时器即可，
+    // 但原版游戏（Unity 5.0 内置的旧 Mono 2.x）里注入 DLL 的 System.Threading.Timer
+    // 不可靠（回调不触发，实测），所以统一改挂游戏自己的每帧回调 OnGameFixedUpdate。
     // TimeCounterDisplay 每 1 秒读一次显示串（m_delay 节流），所以归零后最多 1 秒
     // 界面就同步显示 0。
     //
     // ---- 为什么不做值判断（与 ZeroDeaths 的差别）----
     // ZeroDeaths 里加了 `if (Count != 0)` 是因为死亡数平时不变，判断能省掉绝大多数写入。
-    // 这里恰好相反：游戏每个 FixedUpdate（50Hz，20ms）都 += deltaTime，而本定时器是
-    // 10ms，所以 CurrentTime 几乎从不为 0 —— 判断恒真，只是白白多一次读取。
+    // 这里恰好相反：游戏每个 FixedUpdate（50Hz，20ms）都 += deltaTime，而本钩子也是
+    // 每个 FixedUpdate，所以 CurrentTime 几乎从不为 0 —— 判断恒真，只是白白多一次读取。
     // 直接调 Reset() 更省也更直白。
     //
     // ---- 停止不还原 ----
@@ -60,30 +59,35 @@ namespace OriTrainerDLL.Features
     //   存档槽显示真的都变 0"，而不只是屏幕上的那个计时器显示为 0。
     public static class ResetTime
     {
-        private const int IntervalMs = 10;
-
-        private static Timer _timer;
+        private static Action _hook; // 保留引用以便 Stop 时注销
 
         public static void Start()
         {
-            if (_timer != null) return; // 幂等：重复 Start 不重复起定时器
+            if (_hook != null) return; // 幂等：重复 Start 不重复挂载
 
-            _timer = new Timer(Tick, null, 0, IntervalMs);
+            // Scheduler 由 GameController 持有，而 GameController.Awake 是单例守卫
+            // （Instance 已存在则 Destroy 自身），所以该回调在整个进程内稳定可用。
+            GameScheduler scheduler = Game.Events.Scheduler ?? throw new Exception("GameScheduler 尚未就绪（游戏未启动完成），功能无法挂载");
+
+            _hook = OnGameFixedUpdate;
+            scheduler.OnGameFixedUpdate.Add(_hook);
         }
 
         public static void Stop()
         {
-            if (_timer == null) return;
+            if (_hook == null) return;
 
-            _timer.Dispose();
-            _timer = null;
+            Game.Events.Scheduler.OnGameFixedUpdate.Remove(_hook);
+            _hook = null;
 
             // 刻意不还原 CurrentTime：见文件头"停止不还原"
         }
 
-        private static void Tick(object state)
+        // 由游戏主线程每个 FixedUpdate 调用
+        private static void OnGameFixedUpdate()
         {
-            // 定时器回调里的未捕获异常会终止整个进程（即游戏），必须自己兜住
+            // 游戏回调里抛出的异常会顺着 GameController.FixedUpdate 冒到 Unity，
+            // 后果不可预期，必须自己兜住
             try
             {
                 // 主菜单/读档过程中该单例可能尚未建立；GameTimer 是 MonoBehaviour，

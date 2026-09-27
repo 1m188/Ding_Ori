@@ -1,40 +1,50 @@
-using System.Threading;
+using System;
 
 namespace OriTrainerDLL.Features
 {
     // 超级跳：持续把 5 个跳跃高度字段放大到原值的 Multiplier 倍。
     // 实现同终极版：站立/贴墙/移动跳各段、蹲跳、后空翻各对应一个字段，须全部放大。
+    //
+    // 挂游戏自己的每帧回调 OnGameFixedUpdate（原版旧 Mono 的 System.Threading.Timer
+    // 不可靠，回调不触发）。
     public static class SuperJump
     {
         private const float Multiplier = 2.5f;
-        private const int IntervalMs = 10;
 
-        private static Timer _timer;
+        private static Action _hook; // 保留引用以便 Stop 时注销
 
         private static SeinJump _jump; // 上次捕获原值时的实例，用于识别组件重建
         private static float _first, _second, _third, _crouch, _backflip;
 
         public static void Start()
         {
-            if (_timer != null) return; // 幂等：重复 Start 不重复起定时器
+            if (_hook != null) return; // 幂等：重复 Start 不重复挂载
 
-            _timer = new Timer(Apply, null, 0, IntervalMs);
+            // Scheduler 由 GameController 持有，而 GameController.Awake 是单例守卫
+            // （Instance 已存在则 Destroy 自身），所以该回调在整个进程内稳定可用。
+            GameScheduler scheduler = Game.Events.Scheduler ?? throw new Exception("GameScheduler 尚未就绪（游戏未启动完成），功能无法挂载");
+
+            _hook = OnGameFixedUpdate;
+            scheduler.OnGameFixedUpdate.Add(_hook);
         }
 
         public static void Stop()
         {
-            if (_timer == null) return;
+            if (_hook == null) return;
 
-            _timer.Dispose();
-            _timer = null;
+            Game.Events.Scheduler.OnGameFixedUpdate.Remove(_hook);
+            _hook = null;
 
-            // 定时器回调里的未捕获异常会终止整个进程（即游戏），必须自己兜住
+            // 还原跳跃高度原值。只写 float 字段（不是 Unity API），命令线程可直接做。
             try { Restore(); }
             catch { }
         }
 
-        private static void Apply(object state)
+        // 由游戏主线程每个 FixedUpdate 调用
+        private static void OnGameFixedUpdate()
         {
+            // 游戏回调里抛出的异常会顺着 GameController.FixedUpdate 冒到 Unity，
+            // 后果不可预期，必须自己兜住
             try
             {
                 SeinJump jump = Current();
