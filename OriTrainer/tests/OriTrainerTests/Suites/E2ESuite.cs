@@ -212,11 +212,12 @@ namespace OriTrainerTests
                 "off=" + Count(screen, "[ ]") + " on=" + Count(screen, "[x]") + " screen=" + Dump(screen));
 
             // ---- 3 个普通热键 ----
-            // DE：小键盘 1/3/9（9=显示地图）；原版：小键盘 1/3/8（显示地图紧凑前移到 8）。
+            // DE：小键盘 1/3/9（9=无限冲刺，DE 独有的键位，放在末尾）；
+            // 原版：小键盘 1/3/8（显示地图，键位紧凑前移）。
             Tap(0x61, false);
             Tap(0x63, false);
 #if DE
-            Tap(0x69, false); // 小键盘 9 = 显示地图（终极版）
+            Tap(0x69, false); // 小键盘 9 = 无限冲刺（终极版）
 #else
             Tap(0x68, false); // 小键盘 8 = 显示地图（原版）
 #endif
@@ -227,7 +228,11 @@ namespace OriTrainerTests
             Test.Check("假游戏恰好收到 3 条 Start", Test.WaitFor(() => CountCmds() == 3, 3000),
                 "count=" + CountCmds());
             Test.Check("命令内容与顺序正确",
+#if DE
+                CmdsAre("UnlimitedLife Start", "SoulFlameNoCooldown Start", "InfiniteDash Start"),
+#else
                 CmdsAre("UnlimitedLife Start", "SoulFlameNoCooldown Start", "ShowMap Start"),
+#endif
                 "cmds=" + string.Join(" | ", CmdLines().ToArray()));
 
             // ---- Ctrl+组合键：DE 用 Ctrl+小键盘 4（重置时间），原版用 Ctrl+小键盘 5（三把钥匙）----
@@ -245,12 +250,14 @@ namespace OriTrainerTests
                 "on=" + Count(screen, "[x]") + " screen=" + Dump(screen));
 #if DE
             string fourth = "ResetTime Start";
+            string third = "InfiniteDash Start";
 #else
             string fourth = "GrantKeys Start";
+            string third = "ShowMap Start";
 #endif
             Test.Check("Ctrl 组合键命令正确",
                 Test.WaitFor(() => CountCmds() == 4, 3000) &&
-                CmdsAre("UnlimitedLife Start", "SoulFlameNoCooldown Start", "ShowMap Start", fourth),
+                CmdsAre("UnlimitedLife Start", "SoulFlameNoCooldown Start", third, fourth),
                 "cmds=" + string.Join(" | ", CmdLines().ToArray()));
 
             // ---- 再按一次同一键 = 关闭 ----
@@ -268,7 +275,7 @@ namespace OriTrainerTests
                 Test.WaitFor(() => { screen = Screen(trainer.Id); return Count(screen, "[x]") == Total; }, 5000),
                 "on=" + Count(screen, "[x]") + " screen=" + Dump(screen));
 #if DE
-            // 原本开着 3 个（SoulFlameNoCooldown/ShowMap/ResetTime），所以只补发 11 条
+            // 原本开着 3 个（SoulFlameNoCooldown/InfiniteDash/ResetTime），所以只补发 11 条
             Test.Check("HOME 只对关着的 11 项发 Start", Test.WaitFor(() => CountCmds() == 16, 4000),
                 "count=" + CountCmds() + " cmds=" + string.Join(" | ", CmdLines().ToArray()));
 #else
