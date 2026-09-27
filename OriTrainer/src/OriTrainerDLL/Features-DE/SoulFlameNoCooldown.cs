@@ -1,43 +1,70 @@
-using System.Threading;
+using System;
+using System.Reflection;
 
 namespace OriTrainerDLL.Features
 {
-    // 灵魂链接无需冷却：每 10ms 调用游戏自己的 FillSoulFlameBar() 把冷却清零。
+    // 灵魂链接无需冷却：hook 游戏自己的 HandleCooldown()，让冷却永不衰减，
+    // 并在 replacement 里顺带把 m_cooldownRemaining 清 0。
     //
-    // 用游戏方法而不是反射写私有字段 m_cooldownRemaining：
-    //   - FillSoulFlameBar() 是 public，游戏自己在"捡到能量容器 / 回血"时也调它；
-    //   - 它只写 m_cooldownRemaining = 0 和 m_nagTimer = 0，后者仅抑制"链接已就绪"提示，无副作用；
-    //   - 不必反射碰私有字段，游戏改版也不易失效。
+    // ---- 为什么 hook ----
+    // hook 后：
+    //   · HandleCooldown() 是每帧调用的冷却衰减点，hook 它 = 冷却永不自然衰减；
+    //   · 但 CastSoulFlame() 施放时仍会把 m_cooldownRemaining 置 1，若不处理，
+    //     HandleCharging() 看到 == 1f 会永远不让蓄力。所以 replacement 里顺手清 0。
+    //   · 效果：冷却恒为 0，蓄力判定（m_cooldownRemaining == 0f）恒通过。
     //
-    // 为什么必须持续写：CastSoulFlame() 每次施放都会把 m_cooldownRemaining 置 1，
-    // 之后 HandleCooldown() 每帧递减 deltaTime / CooldownDuration，所以清一次会立刻被还原。
+    // ---- 为什么 replacement 是"接收 SeinSoulFlame 的实例方法" ----
+    // Hook 用 jmp 改写入口，跳转时 this 原样在栈上。HandleCooldown 是私有实例方法
+    // （void HandleCooldown()，IL 层带 this），所以 replacement 必须接收 this 参数
+    // （SeinSoulFlame），否则栈不平衡。replacement 不调用原方法体（返回即"空操作"）。
+    //
+    // ---- 停止 ----
+    // Stop() 只 Unhook，还原 HandleCooldown 原始字节。之后冷却恢复原逻辑（自然衰减）。
     public static class SoulFlameNoCooldown
     {
-        private const int IntervalMs = 10;
+        private static readonly BindingFlags Private =
+            BindingFlags.NonPublic | BindingFlags.Instance;
 
-        private static Timer _timer;
+        private static MethodInfo _target;    // SeinSoulFlame.HandleCooldown
+        private static MethodInfo _replacement; // 我们的 replacement
+        private static FieldInfo _fCooldown;  // m_cooldownRemaining
 
         public static void Start()
         {
-            if (_timer != null) return; // 幂等：重复 Start 不重复起定时器
+            if (Hooks.IsHooked(_target)) return; // 幂等：重复 Start 不重复 hook
 
-            _timer = new Timer(Clear, null, 0, IntervalMs);
+            Type t = typeof(SeinSoulFlame);
+            _target = t.GetMethod("HandleCooldown", Private);
+            _fCooldown = t.GetField("m_cooldownRemaining", Private);
+
+            // 字段/方法名对不上就直接失败（Loader 会记进错误日志），而不是静默空转
+            if (_target == null || _fCooldown == null)
+                throw new Exception("SeinSoulFlame 的 HandleCooldown/m_cooldownRemaining 与预期不符，功能无法工作");
+
+            // replacement 必须是实例方法，签名与 HandleCooldown 兼容（this=SeinSoulFlame）
+            _replacement = typeof(SoulFlameNoCooldown).GetMethod("OnHandleCooldown",
+                BindingFlags.NonPublic | BindingFlags.Static);
+
+            Hooks.Replace(_target, _replacement);
         }
 
         public static void Stop()
         {
-            if (_timer == null) return;
+            if (!Hooks.IsHooked(_target)) return; // 幂等
 
-            _timer.Dispose();
-            _timer = null;
+            Hooks.Unhook(_target);
+            _target = null;
+            _replacement = null;
+            _fCooldown = null;
         }
 
-        private static void Clear(object state)
+        // 由游戏主线程每帧调用（代替 HandleCooldown）。
+        // 清冷却字段 + 什么都不做（返回即"空操作"）。
+        private static void OnHandleCooldown(SeinSoulFlame soulFlame)
         {
-            // 定时器回调里的未捕获异常会终止整个进程（即游戏），必须自己兜住
             try
             {
-                Game.Characters.Sein.SoulFlame.FillSoulFlameBar();
+                _fCooldown.SetValue(soulFlame, 0f);
             }
             catch { }
         }
