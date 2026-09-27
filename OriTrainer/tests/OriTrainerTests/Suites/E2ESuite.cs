@@ -9,8 +9,8 @@
 // 断言核心是"断开时主循环把全部开关复位"—— 这条只能靠真实主循环验证。
 //
 // 版本差异（用 #if DE 区分）：
-//   终极版 15 项功能（普通 1-9 含无限冲刺 7、特殊 Ctrl+1-6 含一命保护 Ctrl+6）；
-//   原版 13 项（少无限冲刺与一命保护，键位紧凑前移：无限能力点数 7、显示地图 8、
+//   终极版 14 项功能（普通 1-9 含无限冲刺 7、特殊 Ctrl+1-5 含重置时间 Ctrl+4）；
+//   原版 13 项（少无限冲刺，键位紧凑前移：无限能力点数 7、显示地图 8、
 //   特殊 Ctrl+1-5）。按键序列与命令计数因此两套。
 
 using System;
@@ -204,7 +204,7 @@ namespace OriTrainerTests
             Test.Check("界面显示已连接", connected, "screen=" + Dump(screen));
 
 #if DE
-            const int Total = 15; // 终极版功能总数
+            const int Total = 14; // 终极版功能总数
 #else
             const int Total = 13; // 原版功能总数
 #endif
@@ -230,17 +230,21 @@ namespace OriTrainerTests
                 CmdsAre("UnlimitedLife Start", "SoulFlameNoCooldown Start", "ShowMap Start"),
                 "cmds=" + string.Join(" | ", CmdLines().ToArray()));
 
-            // ---- Ctrl+组合键：DE 用 Ctrl+小键盘 6（一命保护），原版用 Ctrl+小键盘 5（三把钥匙）----
+            // ---- Ctrl+组合键：DE 用 Ctrl+小键盘 4（重置时间），原版用 Ctrl+小键盘 5（三把钥匙）----
+            // DE 特殊功能：Ctrl+1 死亡数归零、Ctrl+2 100% 探索、Ctrl+3 解锁全部基础技能、
+            //              Ctrl+4 重置时间、Ctrl+5 获得三把钥匙。
+            // 原版特殊功能：Ctrl+1 死亡数归零、Ctrl+2 100% 探索、Ctrl+3 解锁全部基础技能、
+            //              Ctrl+4 重置时间、Ctrl+5 获得三把钥匙（与 DE 相同，仅普通功能少一项）。
 #if DE
-            Tap(0x66, true);
+            Tap(0x64, true); // Ctrl+小键盘 4 = 重置时间
 #else
-            Tap(0x65, true);
+            Tap(0x65, true); // Ctrl+小键盘 5 = 三把钥匙
 #endif
             Test.Check("Ctrl 组合键开启第 4 项",
                 Test.WaitFor(() => { screen = Screen(trainer.Id); return Count(screen, "[x]") == 4; }, 4000),
                 "on=" + Count(screen, "[x]") + " screen=" + Dump(screen));
 #if DE
-            string fourth = "OneLifeProtect Start";
+            string fourth = "ResetTime Start";
 #else
             string fourth = "GrantKeys Start";
 #endif
@@ -264,8 +268,8 @@ namespace OriTrainerTests
                 Test.WaitFor(() => { screen = Screen(trainer.Id); return Count(screen, "[x]") == Total; }, 5000),
                 "on=" + Count(screen, "[x]") + " screen=" + Dump(screen));
 #if DE
-            // 原本开着 3 个（SoulFlameNoCooldown/ShowMap/OneLifeProtect），所以只补发 12 条
-            Test.Check("HOME 只对关着的 12 项发 Start", Test.WaitFor(() => CountCmds() == 17, 4000),
+            // 原本开着 3 个（SoulFlameNoCooldown/ShowMap/ResetTime），所以只补发 11 条
+            Test.Check("HOME 只对关着的 11 项发 Start", Test.WaitFor(() => CountCmds() == 16, 4000),
                 "count=" + CountCmds() + " cmds=" + string.Join(" | ", CmdLines().ToArray()));
 #else
             // 原本开着 3 个（SoulFlameNoCooldown/ShowMap/GrantKeys），所以只补发 10 条
@@ -279,7 +283,7 @@ namespace OriTrainerTests
                 Test.WaitFor(() => { screen = Screen(trainer.Id); return Count(screen, "[x]") == 0 && Count(screen, "[ ]") == Total; }, 5000),
                 "on=" + Count(screen, "[x]") + " screen=" + Dump(screen));
 #if DE
-            Test.Check("HOME 关闭发了 15 条 Stop", Test.WaitFor(() => CountCmds() == 32, 4000),
+            Test.Check("HOME 关闭发了 14 条 Stop", Test.WaitFor(() => CountCmds() == 30, 4000),
                 "count=" + CountCmds());
 #else
             Test.Check("HOME 关闭发了 13 条 Stop", Test.WaitFor(() => CountCmds() == 28, 4000),
@@ -291,7 +295,7 @@ namespace OriTrainerTests
             Tap(0x61, false);
             Tap(0x62, false);
 #if DE
-            Test.WaitFor(() => CountCmds() == 34, 3000);
+            Test.WaitFor(() => CountCmds() == 32, 3000);
 #else
             Test.WaitFor(() => CountCmds() == 30, 3000);
 #endif

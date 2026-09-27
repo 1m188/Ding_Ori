@@ -1,38 +1,43 @@
-using System.Threading;
+using System;
 
 namespace OriTrainerDLL.Features
 {
-    // 无限生命：每 10ms 把当前生命写为上限。实现同终极版。
+    // 无限生命：直接置位游戏自带的"无敌"闸门 SeinDamageReciever.IsImmortal，
+    // 从源头拦截一切伤害判定（含 Crush / 溺水 / 尖刺 / 岩浆等致死伤害）。
     public static class UnlimitedLife
     {
-        private const int IntervalMs = 10;
+        // 置位时 Sein 可能尚未生成（主菜单 / 读档中），返回 false 表示这次没做成；
+        // 命令方（Loader）目前对 Start 失败不重试，因此这里做成"幂等 + 静默失败"：
+        // 玩家在进游戏后再按一次热键即可补上。
+        private static bool TrySet(bool immortal)
+        {
+            try
+            {
+                // SeinDamageReciever 是 MonoBehaviour，!= null 走 UnityEngine.Object
+                // 的 op_Equality，已销毁的假空同样判 null，不必自己查 m_CachedPtr。
+                SeinCharacter sein = Game.Characters.Sein;
+                if (sein == null) return false;
 
-        private static Timer _timer;
+                SeinMortality mortality = sein.Mortality;
+                if (mortality == null) return false;
+
+                SeinDamageReciever reciever = mortality.DamageReciever;
+                if (reciever == null) return false;
+
+                reciever.IsImmortal = immortal;
+                return true;
+            }
+            catch { return false; }
+        }
 
         public static void Start()
         {
-            if (_timer != null) return; // 幂等：重复 Start 不重复起定时器
-
-            _timer = new Timer(Refill, null, 0, IntervalMs);
+            TrySet(true);
         }
 
         public static void Stop()
         {
-            if (_timer == null) return;
-
-            _timer.Dispose();
-            _timer = null;
-        }
-
-        private static void Refill(object state)
-        {
-            // 定时器回调里的未捕获异常会终止整个进程（即游戏），必须自己兜住
-            try
-            {
-                SeinHealthController health = Game.Characters.Sein.Mortality.Health;
-                health.Amount = health.MaxHealth;
-            }
-            catch { }
+            TrySet(false);
         }
     }
 }

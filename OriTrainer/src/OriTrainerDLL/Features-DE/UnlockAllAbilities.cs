@@ -30,13 +30,6 @@ namespace OriTrainerDLL.Features
     // SetGameModeToPrologueAction / ResetStateForDebugMenuGoToScene，
     // 也就是"回标题再读档""重开一局""跳过序章"这类操作仍会打回。
     //
-    // ⚠ 有一个不显眼的例外，不能概括成"死亡恢复一定不会触发"：
-    //   SaveGameController.RestoreCheckpointPart1 在 SaveWasOneLifeAndKilled 为真时
-    //   也会置位这道闸门，此时死亡恢复检查点同样会打回。该条件读的是
-    //   SaveSlotInfo.Difficulty（不是 DifficultyController.Difficulty，前者只在存档时
-    //   由 FillData 拷入），所以同时开着 OneLifeProtect 并把难度存成 Easy 之后，
-    //   这个例外就不会成立。
-    //
     // 本功能持续压制，以上情况都会自动补回；另外每帧调用 EnsureRightPrefabs 对同值
     // 会提前 return（set_IsInstantiated 有同值守卫），开销可忽略。
     //

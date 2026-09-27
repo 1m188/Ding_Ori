@@ -65,9 +65,6 @@ namespace OriTrainer
         public static ConnectionState Connection;
 
         // 顺序即界面顺序：先小键盘（普通功能），再 Ctrl+小键盘（特殊功能）。
-        //
-        // 两版功能列表不同：原版比终极版少「无限冲刺」和「一命保护」两项。
-        // 原版删掉两项后键位紧凑前移（无限能力点数 7、显示地图 8），不留空缺。
         public static readonly Feature[] Features =
         {
 #if DE
@@ -88,7 +85,6 @@ namespace OriTrainer
             new Feature("UnlockAllAbilities", "解锁全部基础技能",    3, true),
             new Feature("ResetTime",          "重置时间",           4, true),
             new Feature("GrantKeys",          "获得三把钥匙",        5, true),
-            new Feature("OneLifeProtect",     "一命保护（死亡不清档）", 6, true),
 #else
             // ===== 普通功能：小键盘 =====
             new Feature("UnlimitedLife",      "无限生命",               1),
