@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
@@ -58,7 +58,9 @@ namespace SharpMonoInjector
                 Native.GetModuleFileNameEx(handle, ptrs[i], path, 260);
 
                 if (path.ToString().IndexOf("mono", StringComparison.OrdinalIgnoreCase) > -1) {
-                    if (!Native.GetModuleInformation(handle, ptrs[i], out MODULEINFO info, (uint)(size * ptrs.Length)))
+                    // cbSize 必须是 sizeof(MODULEINFO)。上游传 size * ptrs.Length（模块数 × 4/8），
+                    // x86 下恰好等于 bytesNeeded 而侥幸通过，纯属数值巧合。
+                    if (!Native.GetModuleInformation(handle, ptrs[i], out MODULEINFO info, (uint)Marshal.SizeOf<MODULEINFO>()))
                         throw new InjectorException("Failed to get module information", new Win32Exception(Marshal.GetLastWin32Error()));
 
                     var funcs = GetExportedFunctions(handle, info.lpBaseOfDll);

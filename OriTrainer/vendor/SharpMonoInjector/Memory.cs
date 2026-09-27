@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
@@ -97,8 +97,12 @@ namespace SharpMonoInjector
 
         public void Dispose()
         {
+            // VirtualAllocEx(MEM_COMMIT) 每次都新开一个 64KB region（已实测），
+            // 所以这里必须用 MEM_RELEASE 把整个 region 还回去；MEM_DECOMMIT 只释放
+            // 物理页、region 依然挂着（地址空间泄漏）。MEM_RELEASE 要求 dwSize 为 0，
+            // 而 MEM_DECOMMIT 要求 dwSize 非 0，两者不能共用同一个 size 参数。
             foreach (var kvp in _allocations)
-                Native.VirtualFreeEx(_handle, kvp.Key, kvp.Value, MemoryFreeType.MEM_DECOMMIT);
+                Native.VirtualFreeEx(_handle, kvp.Key, 0, MemoryFreeType.MEM_RELEASE);
         }
     }
 }

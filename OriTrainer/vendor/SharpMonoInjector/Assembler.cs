@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 namespace SharpMonoInjector
@@ -62,8 +62,16 @@ namespace SharpMonoInjector
 
         public void Push(IntPtr arg)
         {
-            _asm.Add((int)arg < 128 ? (byte)0x6A : (byte)0x68);
-            _asm.AddRange((int)arg <= 255 ? new[] {(byte)arg} : BitConverter.GetBytes((int)arg));
+            // 0x6A = push imm8，只接受有符号字节 [-128, 127]；
+            // 0x68 = push imm32。上游用 (<128) 选 opcode、用 (<=255) 选长度，
+            // 两个界不一致，128..255 会写成 imm32 操作码 + 1 字节操作数，指令错位。
+            if ((int)arg >= -128 && (int)arg < 128) {
+                _asm.Add(0x6A);
+                _asm.Add((byte)(int)arg);
+            } else {
+                _asm.Add(0x68);
+                _asm.AddRange(BitConverter.GetBytes((int)arg));
+            }
         }
 
         public void MovEax(IntPtr arg)

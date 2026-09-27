@@ -267,8 +267,15 @@ namespace SharpMonoInjector
 
         private string ReadMonoString(IntPtr monoString)
         {
+            // MonoString 布局：header(0x10/0x8) + length(int) + chars。
+            // 64 位下 chars 是 char* 字段（8 字节指针），先读指针再解引用取数据；
+            // 32 位下 chars 是内联数组（长度 0 的数组字面量），数据就地存放，无需解引用。
+            // 上游 64 位路径少了一次解引用，读出来的永远是乱码/越界。
             int len = _memory.ReadInt(monoString + (Is64Bit ? 0x10 : 0x8));
-            return _memory.ReadUnicodeString(monoString + (Is64Bit ? 0x14 : 0xC), len * 2);
+            IntPtr chars = Is64Bit
+                ? (IntPtr)_memory.ReadLong(monoString + 0x14)
+                : monoString + 0xC;
+            return _memory.ReadUnicodeString(chars, len * 2);
         }
 
         private void RuntimeInvoke(IntPtr method)

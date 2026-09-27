@@ -26,6 +26,8 @@ net35 → netstandard2.0   error CS0012: 类型"Object"在未引用的程序集�
 
 ## 与上游的差异
 
+本项目针对上游第三方代码做了一些功能裁剪与缺陷修复。
+
 **1. 已移除 `Injector.Eject()` 及其 `CloseAssembly()` 辅助方法。**
 
 上游 `Eject()` 调用 `mono_assembly_close()`。实测证明这条路径会破坏游戏进程：
@@ -52,36 +54,50 @@ net35 → netstandard2.0   error CS0012: 类型"Object"在未引用的程序集�
 改法是把构造函数的后续检查包进 `try/catch`，失败时 `CloseHandle` 后再 rethrow。
 改完实测 40 次尝试句柄增长为 0。
 
-## 未做的修改
+**3. `Memory.Dispose()` 用 `MEM_DECOMMIT` 释放 `VirtualAllocEx` 分配的内存**
+（`Memory.cs`）
 
-上游还有一些已知瑕疵，本项目**暂未改动**，因为当前代码路径不触发：
+正确应为 `MEM_RELEASE`（`0x8000`）。上游用 `MEM_DECOMMIT` 只释放物理页，
+region 依然挂在该进程的地址空间上（泄漏）。已实测确认：本项目每次
+`VirtualAllocEx(MEM_COMMIT)` 都独立新开一个 64KB region，因此改为
+`VirtualFreeEx(_handle, key, 0, MEM_RELEASE)` 可精确释放整个 region
+（`MEM_RELEASE` 要求 dwSize 为 0，正好不能用上游传的 kvp.Value）。
 
-- `Memory.Dispose()` 用 `MEM_DECOMMIT` 释放 `VirtualAllocEx` 分配的内存，
-  正确应为 `MEM_RELEASE`（`0x8000`）。会导致内存泄漏，但不致崩溃。
+**4. `ProcessUtils.GetModuleInformation()` 的 `cbSize` 参数传错**
+（`ProcessUtils.cs`）
 
-- `ProcessUtils.GetModuleInformation()` 的 `cbSize` 参数传错了（`ProcessUtils.cs`）：
+上游传 `(uint)(size * ptrs.Length)`，即 4 × 模块数；x86 下恰好等于前面
+`EnumProcessModulesEx` 算出的 `bytesNeeded`，纯属数值巧合才没出错。
+已改为 MSDN 规定的 `(uint)Marshal.SizeOf<MODULEINFO>()`（x86 下 12，
+x64 下 24，两个平台都正确）。
 
-  ```csharp
-  Native.GetModuleInformation(handle, ptrs[i], out MODULEINFO info, (uint)(size * ptrs.Length))
-  ```
+**5. `Assembler.Push()` 的立即数编码区间错位**
+（`Assembler.cs`）
 
-  `cbSize` 按 MSDN 应为 `sizeof(MODULEINFO)`，x86 下是 **12**。这里传的是
-  `size * ptrs.Length`（4 × 模块数），x86 下恰好等于前面 `EnumProcessModulesEx`
-  算出的 `bytesNeeded`，所以**实测能跑通**（psapi 未严格校验该值），
-  纯属数值上的巧合，并非有意为之。
-
-  潜在影响：模块数极少时该值会小于 12，此时 psapi 可能拒绝写入或截断结构体；
-  但 `mono.dll` 所在进程必然已加载数十个模块，实际不会落到那个区间。
-
-- `Assembler.Push()` 的立即数编码有三个区间，中间那个是错的：
+上游用 `(< 128)` 选操作码、用 `(<= 255)` 选写入长度，两个界不一致，
+参数落在 128..255 时会写成 `0x68`（push imm32）操作码 + 1 字节操作数，
+指令错位。已改为与操作码同界：
 
   | 参数值 | 操作码 | 指令需要 | 实际写入 | 结果 |
   |---|---|---|---|---|
-  | `0..127` | `0x6A`（push imm8） | 1 字节 | 1 字节 | 正确 |
-  | `128..255` | `0x68`（push imm32） | **4 字节** | **1 字节** | **错位** |
-  | `256+` | `0x68`（push imm32） | 4 字节 | 4 字节 | 正确 |
+  | `-128..127` | `0x6A`（push imm8） | 1 字节 | 1 字节 | 正确 |
+  | 其余（含 128..255、负数） | `0x68`（push imm32） | 4 字节 | 4 字节 | 正确 |
 
-  即操作码已按 `>= 128` 切换成 imm32，但写入长度仍按 `<= 255` 只写 1 字节。
-  仅当参数恰好落在 `128..255` 才会出错，目前传入的都是指针，不落在该区间内。
+顺带把负立即数从「一律走 imm32」修正为「-128..127 走 imm8」——原实现里
+`(byte)arg` 会把 -1 变成 0xFF，依旧错位。
 
-改动这些会偏离上游，等实际用到时再处理并单独记录。
+**6. `Injector.ReadMonoString()` 在 64 位下少解引用一层**
+（`Injector.cs`）
+
+`MonoString` 布局：header + length(int) + chars。64 位下 `chars` 是
+`char*` 字段（8 字节指针），必须先读指针再解引用才能拿到字符串数据；
+32 位下 `chars` 是内联数组，数据就地存放。上游 64 位路径少了一次
+解引用，读出来是乱码/越界。本项目游戏为 32 位、走 32 位路径，未触发，
+但修复后 64 位目标也正确了：
+
+```csharp
+IntPtr chars = Is64Bit
+    ? (IntPtr)_memory.ReadLong(monoString + 0x14)
+    : monoString + 0xC;
+return _memory.ReadUnicodeString(chars, len * 2);
+```
