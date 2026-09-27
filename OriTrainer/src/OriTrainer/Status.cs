@@ -67,25 +67,6 @@ namespace OriTrainer
         // 顺序即界面顺序：先小键盘（普通功能），再 Ctrl+小键盘（特殊功能）。
         public static readonly Feature[] Features =
         {
-#if DE
-            // ===== 普通功能：小键盘 =====
-            new Feature("UnlimitedLife",      "无限生命",               1),
-            new Feature("UnlimitedEnergy",    "无限能量",               2),
-            new Feature("SoulFlameNoCooldown","灵魂链接无需冷却",        3),
-            new Feature("SoulFlameAnywhere",  "不安全区域建灵魂链接",    4),
-            new Feature("SuperJump",          "超级跳",                 5),
-            new Feature("InfiniteDoubleJump", "无限二段跳",             6),
-            new Feature("InfiniteDash",       "无限冲刺",               7),
-            new Feature("InfiniteSkillPoints","无限能力点数",            8),
-            new Feature("ShowMap",            "显示地图",               9),
-
-            // ===== 特殊功能：Ctrl+小键盘 =====
-            new Feature("ZeroDeaths",         "死亡数归零",         1, true),
-            new Feature("CompleteExploration","100% 探索",          2, true),
-            new Feature("UnlockAllAbilities", "解锁全部基础技能",    3, true),
-            new Feature("ResetTime",          "重置时间",           4, true),
-            new Feature("GrantKeys",          "获得三把钥匙",        5, true),
-#else
             // ===== 普通功能：小键盘 =====
             new Feature("UnlimitedLife",      "无限生命",               1),
             new Feature("UnlimitedEnergy",    "无限能量",               2),
@@ -95,6 +76,9 @@ namespace OriTrainer
             new Feature("InfiniteDoubleJump", "无限二段跳",             6),
             new Feature("InfiniteSkillPoints","无限能力点数",            7),
             new Feature("ShowMap",            "显示地图",               8),
+#if DE
+            new Feature("InfiniteDash",       "无限冲刺",               9),
+#endif
 
             // ===== 特殊功能：Ctrl+小键盘 =====
             new Feature("ZeroDeaths",         "死亡数归零",         1, true),
@@ -102,7 +86,6 @@ namespace OriTrainer
             new Feature("UnlockAllAbilities", "解锁全部基础技能",    3, true),
             new Feature("ResetTime",          "重置时间",           4, true),
             new Feature("GrantKeys",          "获得三把钥匙",        5, true),
-#endif
         };
     }
 }
