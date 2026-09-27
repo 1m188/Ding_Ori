@@ -20,6 +20,18 @@ namespace OriTrainerDLL
     //    所以 replacement 的签名必须与目标"兼容"（实例方法第一个参数就是 this）。
     // 4. Unhook 还原目标入口的原始 5 字节。
     //
+    // ---- 应用层 ----
+    // 底层原语是 Replace（jmp 到任意 replacement）。其上是一个生命周期句柄 Hook：
+    //   · Hook.Apply(target, replacement) —— 挂载（幂等，返回句柄）
+    //   · hook.Dispose()                    —— 还原（幂等）
+    // replacement 由功能文件提供（每个功能的替换逻辑不同，留在功能文件更直白）。
+    //
+    // ---- 为什么不用 DynamicMethod 自动生成 replacement ----
+    // 曾尝试 Noop/ReturnConst 用 DynamicMethod 生成"空操作/恒返回"的 replacement，
+    // 但 mono 2.x 的 DynamicMethod.MethodHandle 无法被 mono_compile_method 正确处理，
+    // 真机表现为跳转到错误地址、游戏行为全面混乱（不只目标方法，连带二段跳等
+    // 系统都退化）。因此 replacement 必须是普通方法（mono 可编译），由功能文件提供。
+    //
     // ---- 为什么写代码前要 VirtualProtect ----
     // mono JIT 生成的代码页是 RX（可读可执行，不可写），直接 Marshal.Copy 写入会抛
     // AccessViolation（net35 上可被 catch，功能静默失败）。必须先改成 RWX 写完再恢复。
@@ -177,6 +189,41 @@ namespace OriTrainerDLL
             lock (_lock)
             {
                 return target != null && _hooks.ContainsKey(target);
+            }
+        }
+
+        // ---- 应用层句柄 ----
+        //
+        // 把"一个 hook 的完整生命周期"（幂等挂载 + 还原）封装成对象，供功能文件使用，
+        // 避免每个功能重复 IsHooked/Replace/Unhook/清字段的样板。replacement 仍由功能
+        // 文件提供（每个功能的替换逻辑不同；mono 2.x 不支持运行时生成 replacement，
+        // 见文件头"为什么不用 DynamicMethod"）。
+        public sealed class Hook
+        {
+            private readonly MethodInfo _target;
+
+            private Hook(MethodInfo target)
+            {
+                _target = target;
+            }
+
+            // 挂载：把 target 入口改写为 jmp 到 replacement。
+            // 幂等：同一 target 已挂载时返回 null（调用方无需判断 IsHooked）。
+            public static Hook Apply(MethodInfo target, MethodInfo replacement)
+            {
+                if (target == null) throw new ArgumentNullException("target");
+                if (replacement == null) throw new ArgumentNullException("replacement");
+
+                if (IsHooked(target)) return null; // 幂等：重复 Apply 不重复 hook
+
+                Replace(target, replacement);
+                return new Hook(target);
+            }
+
+            // 还原 target 入口的原始字节。幂等：未挂载时什么都不做。
+            public void Dispose()
+            {
+                Unhook(_target);
             }
         }
     }
