@@ -1,120 +1,71 @@
 using System;
+using System.Reflection;
 
 namespace OriTrainerDLL.Features
 {
-    // 超级跳：持续把 5 个跳跃高度字段放大到原值的 Multiplier 倍。
+    // 超级跳：把跳跃高度放大到原值的 Multiplier 倍。
     //
-    // 为什么是 5 个字段：跳跃不是单一变量，PerformJump 按情形分派 ——
-    //   站立跳 / 贴墙跳 / 移动跳 1、2 段 -> FirstJumpHeight
-    //   站立跳 / 移动跳 2 段             -> SecondJumpHeight
-    //   站立跳 / 移动跳 3 段             -> ThirdJumpHeight
-    //   蹲跳                             -> CrouchJumpHeight
-    //   转身后空翻                       -> BackflipJumpHeight
-    // 只放大 FirstJumpHeight 会"有的跳得高、有的照旧"。
+    // ---- 原理：hook 高度→速度换算，而不是每帧写高度字段 ----
+    // SeinJump 的 7 条跳跃路径（后空翻 / 1·2·3 段跑跳 / 1·2·3 段站立跳 / 墙跳 / 蹲跳）
+    // 全部汇聚到同一个入口 SeinJump.CalculateSpeedFromHeight(height)：
+    //   return PhysicsHelper.CalculateSpeedFromHeight(height, this.Sein...GravityStrength);
+    // 起跳时把 height 放大成 height*Multiplier，速度即放大为 原速*Sqrt(Multiplier)。
+    // 单点覆盖全部跳跃，且只放大每次起跳的初始竖直速度，不动水平速度/重力/下落/冲量。
     //
-    // JumpIdleHeight 虽在字段表里，但全程序集无人读取，写了没有任何效果。
-    // JumpImpulse 量纲不同（冲量而非高度），放大易过冲穿图，故不动。
+    // ---- 为什么 hook 实例方法而不是静态 PhysicsHelper ----
+    // 静态 PhysicsHelper.CalculateSpeedFromHeight 还被 JumperEnemy（敌人跳）和
+    // SpringSeinAction（弹簧）复用，hook 静态会把敌人和弹簧也放大。hook SeinJump
+    // 的实例方法只影响 Ori 本人。replacement 内部仍调那个静态方法（未受影响）。
     //
-    // 为什么持续写而不是写一次：跳跃高度虽然运行时无人改写（只有 .ctor 赋值），
-    // 但组件本身可能被游戏重建（能力由 SeinPrefabSet 的预制体按需实例化），
-    // 重建后新实例是预制体默认值，一次性写入会丢。持续写顺带解决"启动时
-    // 还没读档、Sein 为 null 无法捕获原值"的问题。
+    // ---- 为什么不用每帧写 5 个高度字段（旧实现） ----
+    // 旧实现要在每帧遍历写 First/Second/Third/Crouch/BackflipJumpHeight 5 个字段，
+    // 还要捕获原值、识别组件重建后重捕、Stop 时才敢还原。hook 是方法级替换，
+    // 与 SeinJump 实例无关：组件重建天然免疫，Stop 无条件 Unhook 还原。
     //
-    // 为什么挂主线程钩子而不是定时器：原版游戏（Unity 5.0 内置的旧 Mono 2.x）里
-    // 注入 DLL 的 System.Threading.Timer 不可靠（回调不触发，实测），所以统一改挂
-    // 游戏自己的每帧回调 OnGameFixedUpdate
+    // ---- 注意 ----
+    // 这是第一个 float 返回值（x87 ST(0) 返回）的 hook，需真机确认一次。
     public static class SuperJump
     {
         private const float Multiplier = 2.5f;
 
-        private static Action _hook; // 保留引用以便 Stop 时注销
-
-        private static SeinJump _jump; // 上次捕获原值时的实例，用于识别组件重建
-        private static float _first, _second, _third, _crouch, _backflip;
+        private static Hooks.Hook _hook;
 
         public static void Start()
         {
             if (_hook != null) return; // 幂等：重复 Start 不重复挂载
 
-            // Scheduler 由 GameController 持有，而 GameController.Awake 是单例守卫
-            // （Instance 已存在则 Destroy 自身），所以该回调在整个进程内稳定可用。
-            GameScheduler scheduler = Game.Events.Scheduler ?? throw new Exception("GameScheduler 尚未就绪（游戏未启动完成），功能无法挂载");
+            // 目标：SeinJump.CalculateSpeedFromHeight(float)->float，public 实例方法。
+            // 属性 getter 用正规取法（GetProperty+GetGetMethod），这里普通方法直接 GetMethod。
+            MethodInfo target = typeof(SeinJump).GetMethod("CalculateSpeedFromHeight",
+                BindingFlags.Public | BindingFlags.Instance) ?? throw new Exception("SeinJump.CalculateSpeedFromHeight 与预期不符，功能无法工作");
 
-            _hook = OnGameFixedUpdate;
-            scheduler.OnGameFixedUpdate.Add(_hook);
+            if (_hook == null)
+                _hook = Hooks.Hook.Apply(target,
+                    typeof(SuperJump).GetMethod("OnCalculateSpeedFromHeight",
+                        BindingFlags.NonPublic | BindingFlags.Static));
         }
 
         public static void Stop()
         {
-            if (_hook == null) return;
+            if (_hook == null) return; // 幂等
 
-            Game.Events.Scheduler.OnGameFixedUpdate.Remove(_hook);
+            _hook.Dispose();
             _hook = null;
-
-            // 还原跳跃高度原值。只写 float 字段（不是 Unity API），命令线程可直接做。
-            try { Restore(); }
-            catch { }
         }
 
-        // 由游戏主线程每个 FixedUpdate 调用
-        private static void OnGameFixedUpdate()
+        // 由游戏每次起跳时调用（代替 SeinJump.CalculateSpeedFromHeight）。
+        // 实例方法被替换后，this 以第一参数形式传来，签名 compatible。
+        private static float OnCalculateSpeedFromHeight(SeinJump jump, float height)
         {
-            // 游戏回调里抛出的异常会顺着 GameController.FixedUpdate 冒到 Unity，
-            // 后果不可预期，必须自己兜住
-            try
-            {
-                SeinJump jump = Current();
-                if (jump == null) return;
+            // 兜底：Sein 尚未就绪时按原高度返回，不让游戏崩。
+            if (jump == null || jump.Sein == null)
+                return height;
 
-                // 首次拿到 / 组件被重建：按当前实例捕获原值。
-                // 新实例是预制体默认值，与旧实例一致，所以重新捕获是安全的。
-                // 用 Unity 的 != 而不是 ReferenceEquals：前者能正确识别"旧实例已销毁"，
-                // 后者在销毁对象的内存被新对象复用时可能误判为同一个。
-                if (jump != _jump)
-                {
-                    _jump = jump;
-                    _first = jump.FirstJumpHeight;
-                    _second = jump.SecondJumpHeight;
-                    _third = jump.ThirdJumpHeight;
-                    _crouch = jump.CrouchJumpHeight;
-                    _backflip = jump.BackflipJumpHeight;
-                }
-
-                jump.FirstJumpHeight = _first * Multiplier;
-                jump.SecondJumpHeight = _second * Multiplier;
-                jump.ThirdJumpHeight = _third * Multiplier;
-                jump.CrouchJumpHeight = _crouch * Multiplier;
-                jump.BackflipJumpHeight = _backflip * Multiplier;
-            }
-            catch { }
-        }
-
-        private static void Restore()
-        {
-            // 从未成功捕获过原值就还原，会把 0 写进跳跃高度（跳不起来），必须挡住
-            if (_jump == null) return;
-
-            SeinJump jump = Current();
-            if (jump == null) return;
-
-            jump.FirstJumpHeight = _first;
-            jump.SecondJumpHeight = _second;
-            jump.ThirdJumpHeight = _third;
-            jump.CrouchJumpHeight = _crouch;
-            jump.BackflipJumpHeight = _backflip;
-            _jump = null;
-        }
-
-        // 主菜单 / 读档过程中 Sein 或组件为 null，逐层判空
-        private static SeinJump Current()
-        {
-            SeinCharacter sein = Game.Characters.Sein;
-            if (sein == null) return null;
-
-            SeinAbilities abilities = sein.Abilities;
-            if (abilities == null) return null;
-
-            return abilities.Jump;
+            // 直接调静态 PhysicsHelper（未被 hook），不递归目标方法：
+            //   Sqrt(2 * g * (height*M)) == Sqrt(2*g*height) * Sqrt(M)
+            return PhysicsHelper.CalculateSpeedFromHeight(
+                height * Multiplier,
+                jump.Sein.PlatformBehaviour.Gravity.BaseSettings.GravityStrength);
         }
     }
 }
