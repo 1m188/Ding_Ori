@@ -3,82 +3,97 @@ using System.Reflection;
 
 namespace OriTrainerDLL.Features
 {
-    // 无限二段跳：授予二段跳能力并持续维持跳跃次数与锁定时间。
-    // 实现同终极版，必须挂主线程钩子：能力组件要经
-    // SeinPrefabFactory.EnsureRightPrefabsAreThereForAbilities() 用 Object.Instantiate
-    // 实例化（Unity API，只能在主线程调），所以挂 Game.Events.Scheduler.OnGameFixedUpdate。
+    // 无限二段跳：开局无二段跳能力也能空中无限二段跳。
+    //
+    // 分两层：
+    //   · OnGameFixedUpdate（主线程）：授予基础二段跳能力 + 实例化二段跳组件。
+    //     SeinDoubleJump 组件由 SeinPrefabFactory.EnsureRightPrefabsAreThereForAbilities()
+    //     用 Object.Instantiate 实例化（Unity API 仅主线程），且该方法只读 HasAbility
+    //     不授予能力，所以必须先写 HasAbility=true，再调用实例化。
+    //   · hook CanDoubleJump 恒 true：免去每帧写 m_numberOfJumpsAvailable /
+    //     m_remainingLockTime。判定不再看次数与锁，天然无限。
+    //
+    // ---- 为什么必须保留组件解锁，而不能只 hook 判定 ----
+    // SeinController.PerformJump 的二段跳分支要求 CharacterState.IsActive(DoubleJump)
+    // = (bool)DoubleJump && DoubleJump.Active，且 PerformDoubleJump() 是实例方法，
+    // 必须有 SeinDoubleJump 实例才能调用。组件未实例化（开局无能力）时 Sein.Abilities
+    // .DoubleJump 恒为 null，既不进判断也没法凭空调二段跳，光 hook 判定没用。
+    // （曾在 hook 整个 PerformJump 时踩过此坑：去掉授予后 EnsureRightPrefabs... 只读
+    //  false 的 HasAbility，组件永不实例化，表现如同没开。）
+    //
+    // ---- 组件解锁只需主线程 ----
+    // 组件解锁需要 Object.Instantiate（Unity API，仅主线程），所以挂
+    // Game.Events.Scheduler.OnGameFixedUpdate（游戏主线程每帧回调）。它只做
+    // HasAbility + EnsureRightPrefabsAreThereForAbilities，不做字段写入（字段由 hook 免除）。
     public static class InfiniteDoubleJump
     {
-        private const int JumpsAvailable = 999;
+        private static readonly BindingFlags PublicInstance =
+            BindingFlags.Public | BindingFlags.Instance;
 
-        private static readonly BindingFlags Private =
-            BindingFlags.NonPublic | BindingFlags.Instance;
+        private static Hooks.Hook _hook;
 
-        private static FieldInfo _fJumps;    // m_numberOfJumpsAvailable
-        private static FieldInfo _fLockTime; // m_remainingLockTime
-
-        private static Action _hook; // 保留引用以便 Stop 时注销
+        private static Action _unlockHook; // OnGameFixedUpdate 引用，Stop 时注销
 
         public static void Start()
         {
-            if (_hook != null) return; // 幂等：重复 Start 不重复挂载
+            if (_hook != null && _unlockHook != null) return; // 幂等：重复 Start 不重复挂载
 
-            _fJumps = typeof(SeinDoubleJump).GetField("m_numberOfJumpsAvailable", Private);
-            _fLockTime = typeof(SeinDoubleJump).GetField("m_remainingLockTime", Private);
+            // hook CanDoubleJump：属性 getter，走 GetProperty+GetGetMethod 避免 specialname 坑
+            PropertyInfo prop = typeof(SeinDoubleJump).GetProperty("CanDoubleJump", PublicInstance);
+            MethodInfo target = (prop?.GetGetMethod(true)) ?? throw new Exception("SeinDoubleJump.CanDoubleJump 与预期不符，功能无法工作");
 
-            // 字段名对不上就直接失败（Loader 会记进错误日志），而不是每帧静默空转
-            if (_fJumps == null || _fLockTime == null)
-                throw new Exception("SeinDoubleJump 的字段名与预期不符，功能无法工作");
+            if (_hook == null)
+                _hook = Hooks.Hook.Apply(target,
+                    typeof(InfiniteDoubleJump).GetMethod("OnCanDoubleJump",
+                        BindingFlags.NonPublic | BindingFlags.Static));
 
-            GameScheduler scheduler = Game.Events.Scheduler ?? throw new Exception("GameScheduler 尚未就绪（游戏未启动完成），功能无法挂载");
-
-            _hook = OnGameFixedUpdate;
-            scheduler.OnGameFixedUpdate.Add(_hook);
+            // 组件解锁挂在游戏主线程每帧回调
+            if (_unlockHook == null)
+            {
+                GameScheduler scheduler = Game.Events.Scheduler ?? throw new Exception("GameScheduler 尚未就绪（游戏未启动完成），功能无法挂载");
+                _unlockHook = OnGameFixedUpdate;
+                scheduler.OnGameFixedUpdate.Add(_unlockHook);
+            }
         }
 
         public static void Stop()
         {
-            if (_hook == null) return;
+            if (_unlockHook != null)
+            {
+                Game.Events.Scheduler.OnGameFixedUpdate.Remove(_unlockHook);
+                _unlockHook = null;
+            }
 
-            Game.Events.Scheduler.OnGameFixedUpdate.Remove(_hook);
+            _hook?.Dispose();
             _hook = null;
-
-            // 刻意不还原 HasAbility：还原后再次开启无法只靠写标志位重建组件，
-            // 会变成"关了再开就失效"。副作用是关闭后仍保留普通二段跳。
         }
 
-        // 由游戏主线程每个 FixedUpdate 调用
+        // 由游戏主线程每帧调用：授予能力 + 实例化组件，保证 Sein.Abilities.DoubleJump 可用。
         private static void OnGameFixedUpdate()
         {
-            // 游戏回调里抛出的异常会顺着 GameController.FixedUpdate 冒到 Unity，
-            // 后果不可预期，必须自己兜住
             try
             {
                 SeinCharacter sein = Game.Characters.Sein;
                 if (sein == null) return;
 
-                // ① 能力开关
                 PlayerAbilities playerAbilities = sein.PlayerAbilities;
                 if (playerAbilities == null) return;
 
+                // 授予基础二段跳能力（EnsureRightPrefabs... 只读 HasAbility，须先写）
                 if (playerAbilities.DoubleJump != null)
                     playerAbilities.DoubleJump.HasAbility = true;
 
-                // ② 实例化二段跳组件（本功能唯一需要主线程的一步）
-                SeinPrefabFactory prefabs = sein.Prefabs;
-                prefabs?.EnsureRightPrefabsAreThereForAbilities();
-
-                // ③④ 跳跃次数与锁定时间（组件刚由 ② 实例化，此处已可读到）
-                SeinAbilities abilities = sein.Abilities;
-                if (abilities == null) return;
-
-                SeinDoubleJump jump = abilities.DoubleJump;
-                if (jump == null) return;
-
-                _fJumps.SetValue(jump, JumpsAvailable);
-                _fLockTime.SetValue(jump, 0f);
+                // 实例化二段跳组件（EnsureRightPrefabs... 按 HasAbility 补建，主体线程）
+                sein.Prefabs?.EnsureRightPrefabsAreThereForAbilities();
             }
             catch { }
+        }
+
+        // hook CanDoubleJump：恒可二段跳（不看次数/锁，天然无限）。
+        // this 以第一参数传入。
+        private static bool OnCanDoubleJump(SeinDoubleJump jump)
+        {
+            return true;
         }
     }
 }
