@@ -70,6 +70,23 @@
   </ItemGroup>
 
   <!--
+    功能开关音效：on.wav / off.wav 作为普通内嵌资源嵌进 exe。
+    WAV 恒存在（不像 DLL 要等 ProjectReference 产物），静态 ItemGroup 即可，
+    不需要像嵌入载荷那样走 Target。
+
+    LogicalName 固定资源名，运行时用 Assembly.GetManifestResourceStream 取
+    ，与外层的嵌入载荷机制互不影响。
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\resources\on.wav">
+      <LogicalName>OriTrainer.Sounds.On</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\resources\off.wav">
+      <LogicalName>OriTrainer.Sounds.Off</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+  <!--
     把注入载荷嵌进 exe。
 
     为什么必须用 Target 而不是静态 ItemGroup：

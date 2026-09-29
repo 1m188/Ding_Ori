@@ -45,6 +45,7 @@ exe侧全程维护一条长连接：游戏退出、崩溃、重启后会自动�
     - [OriTrainerDLL](./src/OriTrainerDLL/) 奥日与迷失森林修改器将要向游戏中注入的DLL
 - [lib](./lib/) 原版游戏程序集，用于给要注入的dll引用API，从而在注入后能够操作游戏内容
 - [lib-DE](./lib-DE/) 终极版游戏程序集，用于给要注入的dll引用API，从而在注入后能够操作游戏内容
+- [resources](./resources/) 一些程序资源
 - [vendor](./vendor/) sharpmonoinjector项目中注入dll相关的API，修改器exe通过这些API将dll注入到游戏中去
 - [tests](./tests/) 测试套件（假游戏 + 测试项目），跑法见 [tests/README](./tests/README.md)
 - 构建脚本

@@ -32,9 +32,10 @@ namespace OriTrainer
 
         private static void Main()
         {
-            Terminal.Enter();   // 先拿输出设备：失败就直接抛，此刻什么都还没启动，无需清理。
-            Keyboard.Start();   // 起后台线程，立即返回
-            PipeClient.Start(); // 起后台线程，立即返回
+            Sounds.Initialize();    // 启动即加载音效资源，早于任何按键
+            Terminal.Enter();       // 先拿输出设备，准备绘制界面：失败就直接抛，此刻什么都还没启动，无需清理。
+            Keyboard.Start();       // 监听按键：起后台线程，立即返回
+            PipeClient.Start();     // 监听游戏进程准备attach：起后台线程，立即返回
 
             try
             {
@@ -102,7 +103,9 @@ namespace OriTrainer
                 {
                     if (Keyboard.NumPadKey(f.Digit) != e.VirtualKey || f.NeedCtrl != e.Ctrl) continue;
 
-                    Send(f, !f.On);
+                    bool on = !f.On;
+                    Send(f, on);
+                    if (on) Sounds.PlayOn(); else Sounds.PlayOff(); // 按键动作的反馈
                     break;
                 }
             }
@@ -118,6 +121,9 @@ namespace OriTrainer
             foreach (Feature f in Status.Features)
                 if (allOn ? f.On : !f.On)
                     Send(f, !allOn);
+
+            // 只响一声整体反馈，不随每个开关连响。
+            if (allOn) Sounds.PlayOff(); else Sounds.PlayOn();
         }
 
         // 发一条命令并更新状态。
