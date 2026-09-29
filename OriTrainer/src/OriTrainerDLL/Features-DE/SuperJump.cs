@@ -6,7 +6,7 @@ namespace OriTrainerDLL.Features
     // 超级跳：把跳跃高度放大到原值的 Multiplier 倍。
     //
     // ---- 原理：hook 高度→速度换算，而不是每帧写高度字段 ----
-    // SeinJump 的 7 条跳跃路径（后空翻 / 1·2·3 段跑跳 / 1·2·3 段站立跳 / 墙跳 / 蹲跳）
+    // SeinJump 的跳跃路径（后空翻 / 1·2·3 段跑跳 / 1·2·3 段站立跳 / 墙跳 / 蹲跳）
     // 全部汇聚到同一个入口 SeinJump.CalculateSpeedFromHeight(height)：
     //   return PhysicsHelper.CalculateSpeedFromHeight(height, this.Sein...GravityStrength);
     // 起跳时把 height 放大成 height*Multiplier，速度即放大为 原速*Sqrt(Multiplier)。
@@ -21,9 +21,6 @@ namespace OriTrainerDLL.Features
     // 旧实现要在每帧遍历写 First/Second/Third/Crouch/BackflipJumpHeight 5 个字段，
     // 还要捕获原值、识别组件重建后重捕、Stop 时才敢还原。hook 是方法级替换，
     // 与 SeinJump 实例无关：组件重建天然免疫，Stop 无条件 Unhook 还原。
-    //
-    // ---- 注意 ----
-    // 这是第一个 float 返回值（x87 ST(0) 返回）的 hook，需真机确认一次。
     public static class SuperJump
     {
         private const float Multiplier = 2.5f;

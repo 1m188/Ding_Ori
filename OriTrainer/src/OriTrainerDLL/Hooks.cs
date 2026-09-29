@@ -44,9 +44,6 @@ namespace OriTrainerDLL
     // Start()/Stop() 跑在命令线程（注入时已 mono_thread_attach），hook 操作在 attach 线程
     // 上做。改写目标入口的 5 字节与游戏主线程执行该方法存在极小 race 窗口，x86 上
     // E9 rel32 写入不是原子的，但窗口极短，可接受（风灵月影同类做法）。
-    //
-    // ---- 诊断 ----
-    // 每步关键结果写 %TEMP%\OriTrainerDLL_hook.log，真机排查用。
     public static class Hooks
     {
         // ---- mono.dll 导出（DLL 在游戏进程内，直接 P/Invoke）----
