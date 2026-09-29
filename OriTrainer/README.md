@@ -58,4 +58,4 @@ exe侧全程维护一条长连接：游戏退出、崩溃、重启后会自动�
 - 所有项目的构建平台目标都必须是x86，因为游戏是x86的
 - 修改器需要管理员权限（注入要 `PROCESS_ALL_ACCESS`），已通过 `app.manifest` 声明
 - `OriTrainer` / `OriTrainerDLL` 两个项目的 x86 是靠 `RuntimeIdentifier=win-x86` 得到的（它们没设 `PlatformTarget`），不要删掉这一项
-- 修改器的日志统一写入 %TEMP%\OriTrainer.log
+- 修改器的Debug日志统一写入 %TEMP%\OriTrainer.log
