@@ -40,21 +40,27 @@ namespace OriTrainerDLL.Features
     {
         private static Action _hook;            // 保留引用以便还原后注销
         private static volatile bool _running;  // 由命令线程写、主线程读
+        private static readonly object _lock = new object(); // 串行化 Start 与本回调的移除段
 
         public static void Start()
         {
-            // 先置位再判断：Stop 之后钩子还没来得及注销时再次 Start，复用现成钩子即可。
-            _running = true;
+            // 用同一把锁：保证 Start 与主线程回调里"读 running-决定-移除钩子"互斥，
+            // 消除"Stop 后回调还没移除时再次 Start，钩子被回调顺手移除才返回"的极窄交错。
+            lock (_lock)
+            {
+                // 先置位再判断：Stop 之后钩子还没来得及注销时再次 Start，复用现成钩子即可。
+                _running = true;
 
-            if (_hook != null) return; // 幂等：钩子已在，不重复挂载
+                if (_hook != null) return; // 幂等：钩子已在，不重复挂载
 
-            // Scheduler 由 GameController 持有，而 GameController.Awake 是单例守卫
-            // （Instance 已存在则 Destroy 自身），所以该回调在整个进程内稳定可用。
-            // 游戏尚未启动到 GameController 时取出会得到 null，直接报错更易排查。
-            GameScheduler scheduler = Game.Events.Scheduler ?? throw new Exception("GameScheduler 尚未就绪（游戏未启动完成），功能无法挂载");
+                // Scheduler 由 GameController 持有，而 GameController.Awake 是单例守卫
+                // （Instance 已存在则 Destroy 自身），所以该回调在整个进程内稳定可用。
+                // 游戏尚未启动到 GameController 时取出会得到 null，直接报错更易排查。
+                GameScheduler scheduler = Game.Events.Scheduler ?? throw new Exception("GameScheduler 尚未就绪（游戏未启动完成），功能无法挂载");
 
-            _hook = OnGameFixedUpdate;
-            scheduler.OnGameFixedUpdate.Add(_hook);
+                _hook = OnGameFixedUpdate;
+                scheduler.OnGameFixedUpdate.Add(_hook);
+            }
         }
 
         public static void Stop()
@@ -71,7 +77,22 @@ namespace OriTrainerDLL.Features
             // 后果不可预期，必须自己兜住
             try
             {
-                bool running = _running;
+                // 与 Start 同一把锁：串行化"读 running-决定-移除钩子"，见 Start 内注释。
+                bool running;
+                lock (_lock)
+                {
+                    running = _running;
+
+                    // 停止后：还原已落地（或本就无可还原），注销自己。
+                    // 在回调内部注销是安全的：UberDelegate.Call 按下标遍历 m_registers，
+                    // 而 Remove 走的 ListExtension.RemoveUnordered 是"与尾元素交换后 RemoveAt"，
+                    // 不会让枚举失效；最坏只让排在本回调之后的回调少跑一帧。
+                    if (!running)
+                    {
+                        Game.Events.Scheduler.OnGameFixedUpdate.Remove(_hook);
+                        _hook = null;
+                    }
+                }
 
                 AreaMapUI ui = AreaMapUI.Instance;
                 AreaMapDebugNavigation nav = ui?.DebugNavigation;
@@ -81,16 +102,6 @@ namespace OriTrainerDLL.Features
                 // 值已经对了就不动，避免每帧重建 RenderTexture。
                 if (nav != null && nav.UndiscoveredMapVisible != running)
                     nav.ToggleUndiscoveredMap(running);
-
-                // 停止后：还原已落地（或本就无可还原），注销自己。
-                // 在回调内部注销是安全的：UberDelegate.Call 按下标遍历 m_registers，
-                // 而 Remove 走的 ListExtension.RemoveUnordered 是"与尾元素交换后 RemoveAt"，
-                // 不会让枚举失效；最坏只让排在本回调之后的回调少跑一帧。
-                if (!running)
-                {
-                    Game.Events.Scheduler.OnGameFixedUpdate.Remove(_hook);
-                    _hook = null;
-                }
             }
             catch { }
         }

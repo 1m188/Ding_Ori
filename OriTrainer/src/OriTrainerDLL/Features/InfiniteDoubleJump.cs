@@ -38,6 +38,10 @@ namespace OriTrainerDLL.Features
         {
             if (_hook != null && _unlockHook != null) return; // 幂等：重复 Start 不重复挂载
 
+            // 先取 Scheduler：游戏未就绪时直接抛，避免 hook 已挂上而解锁钩子未挂的半挂载态
+            // （否则下次 Start 才在 _unlockHook==null 分支补齐，界面显示开启却未完全生效）。
+            GameScheduler scheduler = Game.Events.Scheduler ?? throw new Exception("GameScheduler 尚未就绪（游戏未启动完成），功能无法挂载");
+
             // hook CanDoubleJump：属性 getter，走 GetProperty+GetGetMethod 避免 specialname 坑
             PropertyInfo prop = typeof(SeinDoubleJump).GetProperty("CanDoubleJump", PublicInstance);
             MethodInfo target = (prop?.GetGetMethod(true)) ?? throw new Exception("SeinDoubleJump.CanDoubleJump 与预期不符，功能无法工作");
@@ -50,7 +54,6 @@ namespace OriTrainerDLL.Features
             // 组件解锁挂在游戏主线程每帧回调
             if (_unlockHook == null)
             {
-                GameScheduler scheduler = Game.Events.Scheduler ?? throw new Exception("GameScheduler 尚未就绪（游戏未启动完成），功能无法挂载");
                 _unlockHook = OnGameFixedUpdate;
                 scheduler.OnGameFixedUpdate.Add(_unlockHook);
             }
