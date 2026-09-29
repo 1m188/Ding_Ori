@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using OriTrainerShared;
 
 namespace OriTrainerDLL
 {
@@ -69,21 +69,6 @@ namespace OriTrainerDLL
 
         private static readonly object _lock = new object();
 
-        private static string LogPath
-        {
-            get { return Path.Combine(Path.GetTempPath(), "OriTrainerDLL_hook.log"); }
-        }
-
-        private static void Log(string msg)
-        {
-            try
-            {
-                File.AppendAllText(LogPath,
-                    string.Format("[{0:HH:mm:ss.fff}] {1}{2}", DateTime.Now, msg, Environment.NewLine));
-            }
-            catch { }
-        }
-
         // 目标/替换方法的 JIT 入口（mono_compile_method 强编译，返回 native 地址）
         private static IntPtr Compile(MethodInfo method)
         {
@@ -109,8 +94,8 @@ namespace OriTrainerDLL
                 {
                     IntPtr targetEntry = Compile(target);
                     IntPtr replacementEntry = Compile(replacement);
-                    Log("target  " + target + "  entry=0x" + targetEntry.ToInt64().ToString("X"));
-                    Log("repl    " + replacement + "  entry=0x" + replacementEntry.ToInt64().ToString("X"));
+                    Logs.Log("target  " + target + "  entry=0x" + targetEntry.ToInt64().ToString("X"));
+                    Logs.Log("repl    " + replacement + "  entry=0x" + replacementEntry.ToInt64().ToString("X"));
 
                     // 目标入口下一条指令地址 = 目标入口 + 5（E9 rel32 长度）
                     long next = targetEntry.ToInt64() + 5;
@@ -141,11 +126,11 @@ namespace OriTrainerDLL
                     VirtualProtect(targetEntry, (UIntPtr)5, oldProtect, out uint restored);
 
                     _hooks[target] = original;
-                    Log("hook OK: " + target);
+                    Logs.Log("hook OK: " + target);
                 }
                 catch (Exception ex)
                 {
-                    Log("hook FAIL: " + ex.GetType().Name + ": " + ex.Message);
+                    Logs.Log("hook FAIL: " + ex.GetType().Name + ": " + ex.Message);
                     throw;
                 }
             }
@@ -173,11 +158,11 @@ namespace OriTrainerDLL
                     VirtualProtect(entry, (UIntPtr)original.Length, oldProtect, out uint restored);
 
                     _hooks.Remove(target);
-                    Log("unhook OK: " + target);
+                    Logs.Log("unhook OK: " + target);
                 }
                 catch (Exception ex)
                 {
-                    Log("unhook FAIL: " + ex.GetType().Name + ": " + ex.Message);
+                    Logs.Log("unhook FAIL: " + ex.GetType().Name + ": " + ex.Message);
                     throw;
                 }
             }

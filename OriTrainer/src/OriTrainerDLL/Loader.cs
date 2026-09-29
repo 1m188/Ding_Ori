@@ -1,6 +1,5 @@
 using System;
 using System.Diagnostics;
-using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -140,18 +139,15 @@ namespace OriTrainerDLL
         // 记一次执行失败。写日志本身也不能抛：调用方在后台线程上，再抛出去整个游戏就没了。
         private static void Log(string subject, Exception ex)
         {
-            // 反射调用会把功能里抛的异常包一层，真实原因在 InnerException
+            // 反射调用会把功能里抛的异常包一层，真实原因在 InnerException。
+            // 解包属于反射调用错误处理（DLL 侧业务），留在 Loader；Logs 只负责写。
             if (ex is TargetInvocationException && ex.InnerException != null)
                 ex = ex.InnerException;
 
-            try
-            {
-                File.AppendAllText(Path.Combine(Path.GetTempPath(), "OriTrainerDLL_error.log"),
-                    string.Format("[{0:yyyy-MM-dd HH:mm:ss.fff}] {1}() 执行失败：{2}: {3}{4}{5}{6}{7}",
-                        DateTime.Now, subject, ex.GetType().FullName, ex.Message,
-                        Environment.NewLine, ex.StackTrace, Environment.NewLine, Environment.NewLine));
-            }
-            catch { }
+            // Logs.Log 内部自行吞异常，这里无需再包一层 try/catch。
+            Logs.Log(string.Format("{0}() 执行失败：{1}: {2}{3}{4}",
+                subject, ex.GetType().FullName, ex.Message,
+                Environment.NewLine, ex.StackTrace));
         }
     }
 }
